@@ -18,6 +18,7 @@ from .config import ROOT, TF_PROFILES, key_hint, load_settings, save_env
 from .engine import Engine
 from .evaluation import metrics as metrics_mod
 from .evaluation import report as report_mod
+from .evaluation import validation as validation_mod
 from .market.store import TIMEFRAMES
 from . import models as models_mod
 from . import runs as runs_mod
@@ -135,7 +136,7 @@ def make_app(engine: Engine) -> web.Application:
         limit = min(int(req.query.get("limit", 100)), 1000)
         where = "probe IS NULL" + (" AND symbol=?" if sym else "")
         rows = engine.db.query(f"SELECT id, ts, symbol, action, decision_json, latency_ms, error_kind, error_msg, issues_json, parsed_json, "
-                               f"price, sl_bp, tp_bp, label_json, probe, qset_version FROM decisions WHERE {where} ORDER BY id DESC LIMIT ?",
+                               f"price, sl_bp, tp_bp, horizon_min, label_json, probe, qset_version FROM decisions WHERE {where} ORDER BY id DESC LIMIT ?",
                                ([sym] if sym else []) + [limit])
         return j([engine._decision_view(r) for r in rows])
 
@@ -219,10 +220,38 @@ def make_app(engine: Engine) -> web.Application:
         m["observations"] = report_mod.observations(m)
         return j(m)
 
+    @routes.get("/api/validation")
+    async def validation(req: web.Request) -> web.Response:
+        """Per-symbol skill with intervals, time-of-day / session / regime / event splits, drift,
+        walk-forward, edge vs cost and execution quality (independent windows only)."""
+        run = int(req.query["run"]) if req.query.get("run") else None
+        model = req.query.get("model") or (None if run else s.model_provider)
+        tf = req.query.get("tf") or (None if run else s.decision_tf)
+        v = await asyncio.to_thread(validation_mod.compute, engine.db, run_id=run, model=model, decision_tf=tf)
+        v["filters"] = {"run": run, "model": model, "tf": tf}
+        v["live_cost_model"] = engine.costs.outcome_costs()
+        v["calibration"] = {"weights": engine.calibrator.weights_view(), "overrides": engine.calibrator.overrides,
+                            "report": {g: engine.calibrator.report.get(g) for g in ("bracket", "return_distribution", "direction", "big_move")}}
+        return j(v)
+
+    @routes.get("/api/strategy")
+    async def strategy_get(_: web.Request) -> web.Response:
+        return j({"strategy": s.strategy_view(), "choices": s.STRATEGY_CHOICES, "costs": engine.costs.outcome_costs()})
+
+    @routes.post("/api/strategy")
+    async def strategy_set(req: web.Request) -> web.Response:
+        """Change strategy settings (only while flat; starts a new run)."""
+        body = await req.json()
+        try:
+            return j(await engine.set_strategy(body if isinstance(body, dict) else {}))
+        except ValueError as exc:
+            return j({"error": str(exc)}, 409)
+
     @routes.get("/api/report")
     async def report(req: web.Request) -> web.Response:
-        m = await asyncio.to_thread(metrics_mod.compute, engine.db, model=req.query.get("model") or None,
-                                    run_id=int(req.query["run"]) if req.query.get("run") else None)
+        run = int(req.query["run"]) if req.query.get("run") else None
+        m = await asyncio.to_thread(metrics_mod.compute, engine.db, model=req.query.get("model") or None, run_id=run)
+        m["validation"] = await asyncio.to_thread(validation_mod.compute, engine.db, run_id=run, model=req.query.get("model") or None)
         md = report_mod.render(m, s.public_view())
         out = ROOT / "data" / "kairos_report.md"
         out.write_text(md, encoding="utf-8")
