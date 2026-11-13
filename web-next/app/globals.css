@@ -294,3 +294,13 @@ dialog.keys { width: min(640px, 95vw); }
 .brand .brand-name { font: 600 15px/1 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", "Helvetica Neue", Arial, sans-serif; letter-spacing: -.01em; color: #fff; white-space: nowrap; }
 .brand .brand-name i { font-style: normal; font-weight: 400; color: #8e8e93; }
 .brand .brand-tag { font: 600 9px var(--mono); color: var(--amber); border: 1px solid var(--amber-dim); padding: 0 4px; letter-spacing: .08em; }
+
+/* VALID screen and STRATEGY dialog */
+.vchip { font: 600 11px var(--cond); letter-spacing: .05em; padding: 0 5px; border: 1px solid var(--line); }
+.vchip.up { color: var(--up); border-color: #1f4a2a; } .vchip.dn { color: var(--down); border-color: #5a1f1f; } .vchip.amb { color: var(--amber); }
+.runin { width: 64px; background: var(--bar); color: var(--text); border: 1px solid var(--line); padding: 2px 6px; }
+.spark { display: block; }
+.stratbtn { margin-left: 6px; }
+dialog.strat { width: min(980px, 96vw); }
+dialog.strat input { background: var(--bar); color: var(--text); border: 1px solid var(--line); padding: 2px 6px; width: 140px; }
+dialog.strat .seg button { padding: 1px 7px; }
