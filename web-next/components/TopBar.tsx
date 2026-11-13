@@ -69,7 +69,7 @@ export function CommandBar() {
     const tfm = ({ "1M": "1", "5M": "5", "15M": "15", "1H": "60", "4H": "240" } as Record<string, string>)[raw];
     const pc = raw.match(/^(?:POS|MAXPOS)\s+(\d+)$/);
     const ttf = raw.match(/^(?:TF|TRADE)\s+(1M|5M|15M|1H)$/);
-    const views: Record<string, any> = { MON: "mon", EVAL: "eval", TRD: "trades", TRADES: "trades", NEWS: "news", N: "news", LOG: "log" };
+    const views: Record<string, any> = { MON: "mon", EVAL: "eval", VALID: "valid", VAL: "valid", TRD: "trades", TRADES: "trades", NEWS: "news", N: "news", LOG: "log" };
     if (pc) return setPosCap(Number(pc[1]));
     if (ttf) return setState({ modal: { kind: "tf", data: ({ "1M": "1", "5M": "5", "15M": "15", "1H": "60" } as any)[ttf[1]] } });
     if (sym) return selectSymbol(sym);
@@ -77,6 +77,7 @@ export function CommandBar() {
     if (views[raw]) return setState({ view: views[raw] });
     if (raw === "ASK" || raw === "PRB") return ask(raw === "PRB");
     if (raw === "KEYS") return setState({ modal: { kind: "keys" } });
+    if (raw === "STRAT" || raw === "STRATEGY") return setState({ modal: { kind: "strategy" } });
     if (raw === "UNIV" || raw === "SYMBOLS" || raw === "SYM") return setState({ modal: { kind: "universe" } });
     if (raw === "HELP" || raw === "?") return setState({ modal: { kind: "help" } });
     flash(`UNKNOWN COMMAND "${raw}" · type HELP`);
@@ -161,7 +162,7 @@ export async function setPosCap(v?: number) {
   }
 }
 
-const VIEWS = [["mon", "F1", "MON"], ["eval", "F2", "EVAL"], ["trades", "F3", "TRADES"], ["news", "F4", "NEWS"], ["log", "F5", "LOG"]] as const;
+const VIEWS = [["mon", "F1", "MON"], ["eval", "F2", "EVAL"], ["valid", "F6", "VALID"], ["trades", "F3", "TRADES"], ["news", "F4", "NEWS"], ["log", "F5", "LOG"]] as const;
 
 export function FKeys() {
   const view = useStore((s) => s.view);
@@ -185,6 +186,8 @@ export function FKeys() {
         </span>
       )}
       {st && <ModelSwitch />}
+      {st && <button className="kbtn stratbtn" onClick={() => setState({ modal: { kind: "strategy" } })}
+        data-tip="Brackets, entries, mirror averaging, trade trigger, filters, sizing, drift action">STRATEGY</button>}
       <span className="venue">VENUE <b>BYBIT TESTNET</b> · SIGNALS <b>BYBIT MAINNET</b> · MODEL <b>{String(st?.model_id || "—").toUpperCase()}</b></span>
     </nav>
   );
