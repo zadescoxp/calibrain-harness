@@ -36,6 +36,15 @@ META = {"sl_bp": 60.0, "tp_bp": 100.0, "cost_bp": 15.0, "price": 100.0, "base_ra
 RAW = {q: 1.0 for q in ("long_bracket", "short_bracket", "return_distribution", "direction", "big_move")}  # trust Kairos fully
 
 
+def v2_settings() -> Settings:
+    """The v2 policy without the v3 filters (event trigger, move filter, validation gate), so the
+    original policy tests keep testing what they were written for. v3 behaviour has its own tests."""
+    s = Settings()
+    s.trade_trigger, s.require_big_move, s.require_validated, s.symmetrize = "every_bar", False, False, False
+    s.direction_source, s.allowed_regimes = "model", []
+    return s
+
+
 def test_questions_within_kairos_limits():
     assert 1 <= len(Q) <= 8
     for q in Q.values():
@@ -64,7 +73,7 @@ def test_validate_flags_bad_answers_without_repairing():
 
 def test_policy_ev_math_and_gates():
     parsed, _ = validate(good_answers(), Q)
-    s = Settings()
+    s = v2_settings()
     s.exploration_mode = False
     d = decide(parsed, META, s, has_position=False, weights=RAW)
     rr, cost_r = 100 / 60, 15 / 60
@@ -186,7 +195,7 @@ def _weak_answers(l_t, l_s, s_t, s_s):
 
 
 def test_exploration_follows_lean_but_never_bypasses_safety():
-    s = Settings()
+    s = v2_settings()
     s.exploration_mode = True
     parsed, issues = validate(_weak_answers(0.36, 0.47, 0.29, 0.54), Q)  # real-like: long preferred
     assert issues == []
@@ -219,10 +228,13 @@ def test_tf_profiles_move_cadence_horizon_and_stop_together():
     from ctb.config import TF_PROFILES
     s = Settings()
     s.symbols = ["A", "B", "C", "D", "E"]
+    s.symmetrize = False
     upd = s.apply_tf_profile("1")
     assert (s.decision_tf, s.horizon_bars, s.atr_tf, s.decision_tf_minutes) == ("1", 30, "5", 1)
     assert upd == {"CTB_DECISION_TF": "1", "CTB_HORIZON_BARS": "30", "CTB_ATR_TF": "5"}
     assert s.required_rph("1", probe_rate=0) == 300 and s.required_rph("5", probe_rate=0) == 60
+    s.symmetrize = True  # every decision also asks the mirrored market
+    assert s.required_rph("1", probe_rate=0) == 600
     s.apply_tf_profile("60")
     assert s.horizon_bars * s.decision_tf_minutes == 720
     for tf, p in TF_PROFILES.items():  # the stop is always sized from a slower timeframe than decisions
@@ -280,7 +292,7 @@ def test_close_reason_from_order_create_type():
 
 # ---------------------------------------------------------------- v2: base rates, calibration, policy
 def strict() -> Settings:
-    s = Settings()
+    s = v2_settings()
     s.exploration_mode = False  # tests must not depend on the local .env
     return s
 
@@ -319,7 +331,7 @@ def test_blend_and_fit_recover_useless_and_perfect_models():
     # a model that is right every time -> w = 1
     perfect = [([1.0, 0.0] if i % 2 == 0 else [0.0, 1.0], [0.5, 0.5], i % 2) for i in range(200)]
     assert fit(perfect)["w"] == 1.0
-    assert fit(perfect[:50])["w"] == 0.5 and not fit(perfect[:50])["fitted"]  # prior until MIN_FIT
+    assert fit(perfect[:20])["w"] == 0.5 and not fit(perfect[:20])["fitted"]  # prior until MIN_FIT independent windows
 
 
 def test_policy_v2_shrinks_overconfident_targets_to_base_rates():
@@ -347,7 +359,7 @@ def test_calibration_rows_label_direction_and_big_move():
     dec = {"parsed_json": {"direction": {"p": 0.7}, "big_move": {"p": 0.4}}, "sl_bp": 50,
            "decision_json": {"meta": {"base_rates": BASE}},
            "label_json": {"return_pct": 0.2, "max_up_pct": 0.6, "max_down_pct": -0.1}}
-    assert rows_for("direction", [dec]) == [([0.7, pytest.approx(0.3)], [0.5, 0.5], 0)]
+    assert rows_for("direction", [dec]) == [([[0.7, pytest.approx(0.3)]], [0.5, 0.5], 0)]
     assert rows_for("big_move", [dec])[0][2] == 0  # +0.6% >= 0.5% stop -> moved
 
 
@@ -423,9 +435,9 @@ def test_calibration_is_fitted_per_trading_timeframe(tmp_path):
                                 "label_json": {"return_pct": 0.1 if i % 2 else -0.1, "max_up_pct": 0, "max_down_pct": 0}})
     tf = {"v": "5"}
     cal = Calibrator(db, tf_fn=lambda: tf["v"])
-    assert cal.refit()["direction"] == 0.0  # fitted: ignore the useless model on 5m
+    assert cal.refit()["direction"] == {"model": 0.0}  # fitted: ignore the useless model on 5m
     tf["v"] = "1"
-    assert cal.maybe_refit()["direction"] == PRIOR_W  # 1m has no history of its own: prior, not 5m's weight
+    assert cal.maybe_refit()["direction"] == {"model": PRIOR_W}  # 1m has no history of its own: prior, not 5m's weight
 
 
 # ---------------------------------------------------------------- multi-model (Kairos + Jev)
@@ -526,9 +538,9 @@ def test_calibration_is_fitted_per_model(tmp_path):
                                 "label_json": {"return_pct": 0.1 if i % 2 else -0.1, "max_up_pct": 0, "max_down_pct": 0}})
     prov = {"v": "kairos"}
     cal = Calibrator(db, tf_fn=lambda: "5", provider_fn=lambda: prov["v"])
-    assert cal.refit()["direction"] == 0.0
+    assert cal.refit()["direction"] == {"model": 0.0}
     prov["v"] = "jev"
-    assert cal.maybe_refit()["direction"] == PRIOR_W  # Jev starts from the prior, never from Kairos's weights
+    assert cal.maybe_refit()["direction"] == {"model": PRIOR_W}  # Jev starts from the prior, never from Kairos's weights
 
 
 def test_concurrent_entries_respect_same_side_cap(tmp_path):
