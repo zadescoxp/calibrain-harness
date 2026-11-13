@@ -415,7 +415,7 @@ def probe_metrics(db: DB) -> dict[str, Any]:
                     diffs.append(abs(a["score"] - b["score"]) / 4)
             if diffs:
                 rep.append(max(diffs))
-        elif r["probe"] == "mirror" and "long_bracket" in op and "short_bracket" in pp:
+        elif r["probe"] in ("mirror", "mirror_pair") and "long_bracket" in op and "short_bracket" in pp:
             # mirrored market: P(long target | orig) should equal P(short target | mirror)
             mir.append((op["long_bracket"]["probs"]["target_first"], pp["short_bracket"]["probs"]["target_first"],
                         op["short_bracket"]["probs"]["target_first"], pp["long_bracket"]["probs"]["target_first"]))
