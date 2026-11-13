@@ -144,6 +144,44 @@ class Settings:
     explore_min_lean_r: float = _f("CTB_EXPLORE_MIN_LEAN_R", 0.05)  # |EV long - EV short| needed
     explore_risk_pct: float = _f("CTB_EXPLORE_RISK_PCT", 0.1)  # % equity risked per exploration trade
 
+    # --- strategy v3: brackets, costs, triggers, filters (see README "Strategy settings") ---
+    # vol: stop = sl_sigma x GARCH sigma over the horizon, never so tight that costs exceed max_cost_r of it;
+    #      when that floor binds, the horizon extends (auto_horizon) until the stop is a fair move again.
+    # atr: the original 1.5 x ATR stop with a min_sl_bp floor and a fixed horizon.
+    bracket_mode: str = os.environ.get("CTB_BRACKET_MODE", "vol").strip().lower()
+    sl_sigma: float = _f("CTB_SL_SIGMA", 1.0)
+    reward_risk: float = _f("CTB_REWARD_RISK", 1.5)
+    max_cost_r: float = _f("CTB_MAX_COST_R", 0.2)  # expected cost may be at most this share of the stop
+    min_sl_bp_vol: float = _f("CTB_MIN_SL_BP_VOL", 10)
+    auto_horizon: bool = _b("CTB_AUTO_HORIZON", True)
+    max_horizon_mult: float = _f("CTB_MAX_HORIZON_MULT", 6)  # longest horizon = this x the profile horizon
+    # entries: maker = post-only limit at the best bid/ask, cancelled after maker_wait_s; taker = capped IOC
+    entry_mode: str = os.environ.get("CTB_ENTRY_MODE", "maker").strip().lower()
+    maker_wait_s: float = _f("CTB_MAKER_WAIT_S", 20)
+    maker_fee_bp: float = _f("CTB_MAKER_FEE_BP", 2.0)
+    stop_slip_bp: float = _f("CTB_STOP_SLIP_BP", 5.0)  # default until enough stops are measured
+    time_exit_slip_bp: float = _f("CTB_TIME_EXIT_SLIP_BP", 2.0)
+    # ask every decision on the real and the mirrored market and average: cancels any built-in long/short bias
+    symmetrize: bool = _b("CTB_SYMMETRIZE", True)
+    ensemble: list[str] = field(default_factory=lambda: [x.lower() for x in _list("CTB_ENSEMBLE", "")])  # extra models
+    ensemble_max_rph: int = _i("CTB_ENSEMBLE_MAX_RPH", 120)  # request budget per extra model
+    # trade only on bars with a market event (decisions are still made and scored on every bar)
+    trade_trigger: str = os.environ.get("CTB_TRADE_TRIGGER", "events").strip().lower()  # events | every_bar
+    direction_source: str = os.environ.get("CTB_DIRECTION_SOURCE", "model").strip().lower()  # model | flow | agree
+    min_flow_score: float = _f("CTB_MIN_FLOW_SCORE", 0.25)
+    require_big_move: bool = _b("CTB_REQUIRE_BIG_MOVE", True)  # calibrated P(move >= 1 stop) above its base rate
+    big_move_margin: float = _f("CTB_BIG_MOVE_MARGIN", 0.03)
+    allowed_regimes: list[str] = field(default_factory=lambda: [x.lower() for x in _list("CTB_ALLOWED_REGIMES", "")])
+    max_spread_bp: float = _f("CTB_MAX_SPREAD_BP", 5)  # mainnet
+    max_testnet_spread_bp: float = _f("CTB_MAX_TESTNET_SPREAD_BP", 25)
+    min_depth_mult: float = _f("CTB_MIN_DEPTH_MULT", 3)  # mainnet depth within 10 bp >= this x our notional
+    require_validated: bool = _b("CTB_REQUIRE_VALIDATED", True)  # strict trades need proven out-of-sample skill
+    drift_action: str = os.environ.get("CTB_DRIFT_ACTION", "base").strip().lower()  # base | pause | alert
+    dynamic_sizing: bool = _b("CTB_DYNAMIC_SIZING", True)
+    dd_throttle_pct: float = _f("CTB_DD_THROTTLE_PCT", 1.0)  # run drawdown (% equity) that halves risk
+    be_trigger_r: float = _f("CTB_BE_TRIGGER_R", 1.0)  # move the stop to break-even after this many R (0 = off)
+    be_offset_bp: float = _f("CTB_BE_OFFSET_BP", 5)
+
     # --- risk ---
     risk_per_trade_pct: float = _f("CTB_RISK_PER_TRADE_PCT", 0.5)
     max_leverage: int = _i("CTB_MAX_LEVERAGE", 3)
@@ -186,7 +224,8 @@ class Settings:
     def required_rph(self, tf: str | None = None, probe_rate: float = 0.05) -> int:
         """Kairos requests/hour a trading timeframe needs: one per closed bar per symbol, plus probes."""
         minutes = int(tf or self.decision_tf)
-        return int(round(len(self.symbols) * (60 / minutes) * (1 + 3 * probe_rate)))
+        per_decision = 2 if self.symmetrize else 1  # real + mirrored market
+        return int(round(len(self.symbols) * (60 / minutes) * (per_decision + 3 * probe_rate)))
 
     def apply_tf_profile(self, tf: str) -> dict[str, str]:
         p = TF_PROFILES[tf]
@@ -241,7 +280,48 @@ class Settings:
             "kairos_max_requests_per_hour": self.kairos_max_requests_per_hour,
             "bybit_keys_configured": bool(self.bybit_api_key and self.bybit_api_secret),
             "venue": "bybit-testnet",
+            "strategy": self.strategy_view(),
         }
+
+    STRATEGY_ENV = {
+        "bracket_mode": "CTB_BRACKET_MODE", "sl_sigma": "CTB_SL_SIGMA", "reward_risk": "CTB_REWARD_RISK",
+        "max_cost_r": "CTB_MAX_COST_R", "auto_horizon": "CTB_AUTO_HORIZON", "entry_mode": "CTB_ENTRY_MODE",
+        "maker_wait_s": "CTB_MAKER_WAIT_S", "symmetrize": "CTB_SYMMETRIZE", "trade_trigger": "CTB_TRADE_TRIGGER",
+        "direction_source": "CTB_DIRECTION_SOURCE", "require_big_move": "CTB_REQUIRE_BIG_MOVE",
+        "allowed_regimes": "CTB_ALLOWED_REGIMES", "require_validated": "CTB_REQUIRE_VALIDATED",
+        "drift_action": "CTB_DRIFT_ACTION", "dynamic_sizing": "CTB_DYNAMIC_SIZING", "be_trigger_r": "CTB_BE_TRIGGER_R",
+        "ensemble": "CTB_ENSEMBLE", "max_spread_bp": "CTB_MAX_SPREAD_BP", "min_depth_mult": "CTB_MIN_DEPTH_MULT",
+    }
+    STRATEGY_CHOICES = {
+        "bracket_mode": ("vol", "atr"), "entry_mode": ("maker", "taker"), "trade_trigger": ("events", "every_bar"),
+        "direction_source": ("model", "flow", "agree"), "drift_action": ("base", "pause", "alert"),
+    }
+
+    def strategy_view(self) -> dict:
+        return {k: getattr(self, k) for k in self.STRATEGY_ENV}
+
+    def set_strategy(self, updates: dict) -> dict[str, str]:
+        """Validate and apply strategy settings; returns the env lines to persist."""
+        env: dict[str, str] = {}
+        for k, v in updates.items():
+            if k not in self.STRATEGY_ENV:
+                raise ValueError(f"unknown strategy setting {k}")
+            cur = getattr(self, k)
+            if k in self.STRATEGY_CHOICES:
+                v = str(v).strip().lower()
+                if v not in self.STRATEGY_CHOICES[k]:
+                    raise ValueError(f"{k} must be one of {', '.join(self.STRATEGY_CHOICES[k])}")
+            elif isinstance(cur, bool):
+                v = v if isinstance(v, bool) else str(v).strip().lower() in {"1", "true", "yes", "on"}
+            elif isinstance(cur, list):
+                v = [x.strip().lower() for x in (v if isinstance(v, list) else str(v).split(",")) if x.strip()]
+            elif isinstance(cur, (int, float)):
+                v = float(v)
+                if v < 0:
+                    raise ValueError(f"{k} must be >= 0")
+            setattr(self, k, v)
+            env[self.STRATEGY_ENV[k]] = ",".join(v) if isinstance(v, list) else ("1" if v is True else "0" if v is False else str(v))
+        return env
 
 
 def _models():
