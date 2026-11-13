@@ -148,6 +148,7 @@ class Executor:
         self.mainnet_fn: Callable[[str], dict[str, Any]] | None = None  # mainnet ticker, attached by the engine
         self.mainnet_age_fn: Callable[[str], float] | None = None  # time of the last mainnet update
         self.run_id_fn: Callable[[], int | None] = lambda: None  # attached by the engine
+        self.corr_fn: Callable[[str, list[str]], dict[str, float]] | None = None  # 5m return correlations, attached by the engine
 
     async def start(self) -> None:
         await self.client.sync_time()
@@ -226,9 +227,21 @@ class Executor:
         return None
 
     # ------------------------------------------------------------------ entries
+    def run_drawdown_pct(self) -> float:
+        """Current drawdown of this run's realised P&L from its peak, in % of equity."""
+        rid = self.run_id_fn()
+        rows = self.db.query("SELECT realized_pnl FROM trades WHERE status='closed' AND run_id IS ? ORDER BY closed_ts", (rid,))
+        cum = peak = 0.0
+        for r in rows:
+            cum += r["realized_pnl"] or 0.0
+            peak = max(peak, cum)
+        eq = float(self.wallet.get("equity") or 0)
+        return 100 * (peak - cum) / eq if eq > 0 else 0.0
+
     async def open(self, *, symbol: str, side: str, sl_bp: float, tp_bp: float, decision_id: int, ev_r: float,
-                   exploration: bool = False, decision_price: float | None = None) -> dict[str, Any]:
-        from ..policy import size_position
+                   exploration: bool = False, decision_price: float | None = None, horizon_min: int | None = None,
+                   vol_state: str | None = None, regime: str | None = None, events: list[str] | None = None) -> dict[str, Any]:
+        from ..policy import risk_pct_for, size_position
 
         async with self.lock(symbol):
             # Portfolio caps (positions, same side, open stop-risk) are checked and the trade is
@@ -252,11 +265,13 @@ class Executor:
                 buy = side == "long"
                 sign = 1 if buy else -1
 
+                maker = self.s.entry_mode == "maker"
                 book = await self.client.orderbook(symbol, 50)
                 levels = book["asks"] if buy else book["bids"]
                 if not levels or not book["bids"] or not book["asks"]:
                     return {"ok": False, "reason": "testnet book is empty"}
-                ref = levels[0][0]  # best price we can trade at right now
+                ref = levels[0][0]  # best price we can take right now
+                post_px = (book["bids"] if buy else book["asks"])[0][0]  # maker: rest on our own side of the book
                 mid = (book["bids"][0][0] + book["asks"][0][0]) / 2
                 spread_bp = (book["asks"][0][0] - book["bids"][0][0]) / mid * 10000
                 raw_cap = ref * (1 + sign * self.s.max_entry_slip_bp / 10000)
@@ -264,14 +279,21 @@ class Executor:
                 depth = depth_within(levels, cap, buy=buy)
 
                 equity = float(self.wallet["equity"])
-                risk_pct = min(self.s.explore_risk_pct, self.s.risk_per_trade_pct) if exploration else None
+                same_syms = list(dict.fromkeys(
+                    [t["symbol"] for t in self.db.query("SELECT symbol, side FROM trades WHERE status IN ('open','opening')") if t["side"] == side]
+                    + [p["symbol"] for p in self.positions if (p["side"] == "Buy") == (side == "long")]))
+                corr = self.corr_fn(symbol, [x for x in same_syms if x != symbol]) if self.corr_fn else {}
+                risk_pct, sizing = risk_pct_for(self.s, exploration=exploration, ev_r=ev_r, vol_state=vol_state,
+                                                run_drawdown_pct=self.run_drawdown_pct(), same_side_corr=list(corr.values()))
+                sizing["same_side_open"] = same_syms
+                sizing["correlations"] = corr
                 qty_raw, _ = size_position(equity, sl_bp, ref, self.s, risk_pct)
                 # portfolio stop-risk cap: open risk + this trade <= max_open_risk_pct of equity (shrink to fit)
                 open_risk = sum(t["risk_usd"] or 0 for t in self.db.query("SELECT risk_usd FROM trades WHERE status IN ('open','opening')"))
                 room = equity * self.s.max_open_risk_pct / 100 - open_risk
                 per_unit_risk = ref * sl_bp / 10000
                 risk_qty = room / per_unit_risk if per_unit_risk > 0 else 0.0
-                qty = _floor_step(max(0.0, min(qty_raw, inst["max_qty"], depth, risk_qty)), step)
+                qty = _floor_step(max(0.0, min(qty_raw, inst["max_qty"], qty_raw if maker else depth, risk_qty)), step)
                 if qty < inst["min_qty"] or qty * ref < inst["min_notional"]:
                     if risk_qty < qty_raw and risk_qty <= depth:
                         why = f"open stop-risk {open_risk:.0f} USDT leaves no room under {self.s.max_open_risk_pct}% of equity"
@@ -301,30 +323,47 @@ class Executor:
                 trade_id = self.db.insert("trades", {
                     "decision_id": decision_id, "symbol": symbol, "side": side, "qty": qty, "notional": qty * ref,
                     "entry_link_id": link, "tp_price": tp0, "sl_price": sl0, "protection": "pending",
-                    "opened_ts": time.time(), "deadline_ts": time.time() + self.s.horizon_bars * self.s.decision_tf_minutes * 60,
+                    "opened_ts": time.time(),
+                    "deadline_ts": time.time() + (horizon_min or self.s.horizon_bars * self.s.decision_tf_minutes) * 60,
+                    "horizon_min": horizon_min or self.s.horizon_bars * self.s.decision_tf_minutes,
+                    "entry_mode": "maker" if maker else "taker", "sizing_json": sizing, "regime": regime, "events_json": events or [],
                     "status": "opening", "ev_r": ev_r, "risk_usd": qty * ref * sl_bp / 10000, "mode": mode, "notes": mode,
                     "requested_qty": qty, "ref_price": ref, "cap_price": cap, "decision_price": decision_price,
                     "book_spread_bp": round(spread_bp, 2), "planned_sl_bp": sl_bp, "planned_tp_bp": tp_bp,
                     "exit_mode": self.s.exit_mode, "run_id": self.run_id_fn(),
                 })
             try:
-                res = await self.client.market_order(symbol, "buy" if buy else "sell", _fmt(qty, step), link_id=link,
-                                                     take_profit=_fmt(tp0, tick) if tp0 else None, stop_loss=_fmt(sl0, tick), limit_price=_fmt(cap, tick),
-                                                     trigger_by=trig)
+                if maker:
+                    sl0 = _round_tick((mark0 or post_px) * (1 - sign * stop_mult * sl_bp / 10000), tick)
+                    res = await self.client.limit_order(symbol, "buy" if buy else "sell", _fmt(qty, step), _fmt(post_px, tick),
+                                                        link_id=link, reduce_only=False, tif="PostOnly", stop_loss=_fmt(sl0, tick),
+                                                        trigger_by=trig)
+                else:
+                    res = await self.client.market_order(symbol, "buy" if buy else "sell", _fmt(qty, step), link_id=link,
+                                                         take_profit=_fmt(tp0, tick) if tp0 else None, stop_loss=_fmt(sl0, tick), limit_price=_fmt(cap, tick),
+                                                         trigger_by=trig)
             except BybitError as exc:
                 self.db.update("trades", trade_id, {"status": "error", "notes": str(exc)})
                 self.emit("event", self.db.event("error", "entry_rejected", str(exc), symbol))
                 return {"ok": False, "reason": str(exc)}
 
-            order = await self._wait_order(symbol, link)
+            if maker:
+                order = await self._wait_maker(symbol, link, (res or {}).get("orderId"), self.s.maker_wait_s)
+            else:
+                order = await self._wait_order(symbol, link)
             filled = _f(order.get("cumExecQty")) if order else 0.0
             if filled <= 0:
+                why = (f"post-only bid/ask at {post_px} not filled within {self.s.maker_wait_s:g}s" if maker
+                       else f"IOC got no fill within {self.s.max_entry_slip_bp:g}bp cap")
                 self.db.update("trades", trade_id, {"status": "unfilled", "entry_order_id": (res or {}).get("orderId"),
-                                                    "notes": f"IOC got no fill within {self.s.max_entry_slip_bp:g}bp cap ({(order or {}).get('orderStatus')})"})
-                self.emit("event", self.db.event("warn", "entry_unfilled", f"{side} IOC got no fill up to {cap}", symbol))
-                return {"ok": False, "reason": "no testnet liquidity inside the price cap"}
+                                                    "entry_wait_ms": round((time.time() - t0) * 1000) if maker else None,
+                                                    "notes": f"{why} ({(order or {}).get('orderStatus')})"})
+                self.emit("event", self.db.event("warn", "entry_unfilled", f"{side}: {why}", symbol))
+                return {"ok": False, "reason": why}
 
             entry = _f(order["avgPrice"])
+            if maker:
+                ref = post_px
             slip = adverse_bp(side, entry, ref, entry=True)
             tp = _round_tick(entry * (1 + sign * tp_bp / 10000), tick)
             sl = _round_tick(entry * (1 - sign * sl_bp / 10000), tick)
@@ -334,6 +373,7 @@ class Executor:
                 "status": "open", "entry_order_id": order.get("orderId"), "entry_price": entry, "qty": filled,
                 "notional": filled * entry, "entry_fee": _f(order.get("cumExecFee")), "entry_slip_bp": slip,
                 "risk_usd": filled * abs(entry - sl0), "entry_latency_ms": round((time.time() - t0) * 1000),
+                "entry_wait_ms": round((time.time() - t0) * 1000) if maker else None, "ref_price": ref,
             })
             if managed:
                 mark1 = await self._mark(symbol) or mark0
@@ -354,11 +394,33 @@ class Executor:
                                                 "risk_usd": filled * abs(entry - sl_live)})
             self._refresh_managed()
             part = "" if filled >= qty - 1e-12 else f" (partial: {filled:g} of {qty:g})"
-            msg = (f"{'EXPLORE ' if exploration else ''}{side.upper()} {filled:g}{part} @ {entry} | ref {ref} slip {slip:+.1f}bp "
+            msg = (f"{'EXPLORE ' if exploration else ''}{'MAKER ' if maker else ''}{side.upper()} {filled:g}{part} @ {entry} | ref {ref} slip {slip:+.1f}bp "
+                   f"| risk {sizing.get('risk_pct', 0):.3f}% "
                    f"| TP {tp_live} SL {sl_live} ({protection})")
             self.emit("event", self.db.event("trade", "opened", msg, symbol))
             self.emit("trade", {"id": trade_id})
             return {"ok": True, "trade_id": trade_id, "entry": entry, "qty": filled}
+
+    async def _wait_maker(self, symbol: str, link: str, order_id: str | None, wait_s: float) -> dict[str, Any] | None:
+        """Wait for a resting post-only entry to fill; cancel what is left after wait_s and return the
+        final order state (a fill can land in the instant before the cancel, so read it back after)."""
+        deadline = time.time() + wait_s
+        last = None
+        while time.time() < deadline:
+            await asyncio.sleep(0.5)
+            try:
+                last = await self.client.order_history(symbol, order_link_id=link)
+            except BybitError:
+                continue
+            if last and last.get("orderStatus") in TERMINAL_ORDER_STATES:
+                return last
+        oid = order_id or (last or {}).get("orderId")
+        if oid:
+            try:
+                await self.client.cancel_order(symbol, oid)
+            except BybitError as exc:
+                self.emit("event", self.db.event("warn", "maker_cancel_failed", str(exc), symbol))
+        return await self._wait_order(symbol, link, timeout_s=3.0) or last
 
     async def _wait_order(self, symbol: str, link: str, timeout_s: float = 5.0) -> dict[str, Any] | None:
         deadline = time.time() + timeout_s
@@ -520,7 +582,9 @@ class Executor:
         self._refresh_managed()
         for sym in list(self._managed):  # fallback if a stream missed a move
             await self.check_stop(sym)
-        for t in self.db.query("SELECT * FROM trades WHERE status='opening' AND opened_ts < ?", (time.time() - 20,)):
+        for t in self.db.query("SELECT * FROM trades WHERE status='opening' AND opened_ts < ?", (time.time() - 20 - self.s.maker_wait_s,)):
+            if self.lock(t["symbol"]).locked():
+                continue  # the entry is still being worked (maker wait)
             await self.resolve_opening(t)
         for t in self.db.query("SELECT * FROM trades WHERE status='open'"):
             if self.lock(t["symbol"]).locked() or t["id"] in self._closing:
@@ -591,7 +655,10 @@ class Executor:
         trigger = t["sl_price"] if reason == "stop_loss" else t["tp_price"] if reason == "take_profit" else None
         exit_slip = adverse_bp(t["side"], agg["exit_price"], trigger, entry=False) if trigger else None
         entry, sl = t.get("entry_price"), t.get("sl_price")
-        risk = t["qty"] * abs(entry - sl) if entry and sl else t.get("risk_usd")
+        if t.get("be_moved_ts") and entry and t.get("planned_sl_bp"):
+            risk = t["qty"] * entry * t["planned_sl_bp"] / 10000  # the stop moved; 1R is still the original risk
+        else:
+            risk = t["qty"] * abs(entry - sl) if entry and sl else t.get("risk_usd")
         r_mult = agg["pnl"] / risk if risk else None
         self.db.update("trades", t["id"], {
             "status": "closed", "closed_ts": agg["closed_ts"], "exit_price": agg["exit_price"], "realized_pnl": agg["pnl"],
@@ -628,13 +695,16 @@ class Executor:
         return protection + "+managed", tp, sl
 
     def _refresh_managed(self) -> None:
-        rows = self.db.query("SELECT id, symbol, side, sl_price, tp_price, decision_price, planned_sl_bp FROM trades "
-                             "WHERE status='open' AND exit_mode='managed'")
+        rows = self.db.query("SELECT id, symbol, side, sl_price, tp_price, decision_price, planned_sl_bp, entry_price, "
+                             "be_moved_ts, mfe_r FROM trades WHERE status='open' AND exit_mode='managed'")
         for r in rows:
             # the same stop distance, measured on mainnet from the mainnet price the decision was made on
             sign = 1 if r["side"] == "long" else -1
-            r["mainnet_sl"] = (r["decision_price"] * (1 - sign * r["planned_sl_bp"] / 10000)
-                               if r.get("decision_price") and r.get("planned_sl_bp") else None)
+            if r.get("be_moved_ts") and r.get("decision_price"):
+                r["mainnet_sl"] = r["decision_price"] * (1 + sign * self.s.be_offset_bp / 10000)
+            else:
+                r["mainnet_sl"] = (r["decision_price"] * (1 - sign * r["planned_sl_bp"] / 10000)
+                                   if r.get("decision_price") and r.get("planned_sl_bp") else None)
         self._managed = {r["symbol"]: r for r in rows}
 
     async def on_testnet_tick(self, symbol: str, t: dict[str, Any]) -> None:
@@ -661,6 +731,8 @@ class Executor:
         mn = _f(mn_t.get(side_key)) or _f(mn_t.get("lastPrice"))
         mn_fresh = bool(mn) and time.time() - (self.mainnet_age_fn(symbol) if self.mainnet_age_fn else 1e9) < MAINNET_STALE_S
         crossed = lambda px, lvl: bool(px and lvl) and (px <= lvl if buy else px >= lvl)  # noqa: E731
+        if mn_fresh and m.get("decision_price") and m.get("planned_sl_bp"):
+            self._track_progress(m, mn)
         tn_hit = crossed(tn, m["sl_price"])
         if mn_fresh and m.get("mainnet_sl"):
             hit, basis, px = crossed(mn, m["mainnet_sl"]), "mainnet", mn
@@ -685,6 +757,25 @@ class Executor:
         finally:
             self._exiting.discard(symbol)
             self._refresh_managed()
+
+    def _track_progress(self, m: dict[str, Any], mn: float) -> None:
+        """Record the best excursion (R, on mainnet) and move the stop to break-even once it reaches
+        be_trigger_r: the trade can then no longer turn a winner into a full 1R loss."""
+        sign = 1 if m["side"] == "long" else -1
+        r_now = sign * (mn / m["decision_price"] - 1) * 10000 / m["planned_sl_bp"]
+        if r_now > (m.get("mfe_r") or 0.0) + 0.1:
+            m["mfe_r"] = round(r_now, 2)
+            self.db.update("trades", m["id"], {"mfe_r": m["mfe_r"]})
+        if self.s.be_trigger_r > 0 and not m.get("be_moved_ts") and r_now >= self.s.be_trigger_r and m.get("entry_price"):
+            off = self.s.be_offset_bp / 10000
+            new_sl = m["entry_price"] * (1 + sign * off)
+            m["be_moved_ts"] = time.time()
+            m["sl_price"] = new_sl
+            m["mainnet_sl"] = m["decision_price"] * (1 + sign * off)
+            self.db.update("trades", m["id"], {"be_moved_ts": m["be_moved_ts"], "sl_price": new_sl})
+            self.emit("event", self.db.event("trade", "break_even",
+                                             f"+{r_now:.2f}R on mainnet: stop moved to break-even ({new_sl:.6g}, {self.s.be_offset_bp:g}bp past entry)",
+                                             m["symbol"]))
 
     def account_view(self) -> dict[str, Any]:
         return {
