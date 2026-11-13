@@ -23,6 +23,7 @@ def config_snapshot(s: Settings) -> dict[str, Any]:
         "qset": QUESTION_SET_VERSION, "exploration_mode": s.exploration_mode, "exit_mode": s.exit_mode,
         "risk_per_trade_pct": s.risk_per_trade_pct, "explore_risk_pct": s.explore_risk_pct, "max_positions": s.max_positions,
         "min_edge_r": s.min_edge_r, "max_entry_slip_bp": s.max_entry_slip_bp,
+        "strategy": s.strategy_view(),
     }
 
 
@@ -36,7 +37,9 @@ def start(db: DB, s: Settings, name: str | None = None, notes: str | None = None
     db.conn.execute("UPDATE runs SET ended_ts=? WHERE ended_ts IS NULL", (now,))
     n = (db.one("SELECT COUNT(*) n FROM runs") or {}).get("n", 0) + 1
     cfg = config_snapshot(s)
+    st = cfg["strategy"]
     auto = (f"Run {n} · {s.model_spec.label} · {cfg['qset']} · {'explore' if cfg['exploration_mode'] else 'strict'} · "
+            f"{st['bracket_mode']} bracket · {st['entry_mode']} · {'sym' if st['symmetrize'] else 'raw'} · {st['trade_trigger']} · "
             f"{len(cfg['symbols'])} symbols")
     rid = db.insert("runs", {"name": name or auto, "started_ts": now, "ended_ts": None, "notes": notes, "config_json": cfg})
     return db.one("SELECT * FROM runs WHERE id=?", (rid,))
