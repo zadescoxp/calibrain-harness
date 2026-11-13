@@ -11,6 +11,7 @@ Design rules (driven by Kairos's 4096-token-per-question context):
 from __future__ import annotations
 
 import math
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -69,20 +70,63 @@ def atr_pct(st: SymbolState, tf: str) -> float | None:
     return 100 * a / bars[-1].c if a else None
 
 
-def bracket(st: SymbolState, s: Settings) -> dict[str, float] | None:
-    """Stop/target distances in bp, sized from ATR and clamped to sane bounds."""
+def bracket(st: SymbolState, s: Settings, models: Any = None, costs: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """Stop/target distances in bp and the horizon in decision bars.
+
+    atr mode: stop = sl_atr x ATR(atr_tf) clamped to [min_sl_bp, max_sl_bp]; fixed horizon.
+    vol mode: stop = sl_sigma x GARCH sigma of the return over the horizon. The stop may not be so
+      tight that the expected cost exceeds max_cost_r of it; when that floor binds and auto_horizon is on,
+      the horizon is extended (up to max_horizon_mult x the profile horizon) until the stop is again
+      sl_sigma standard deviations of the move over the horizon, so the target stays reachable."""
     a = atr_pct(st, s.atr_tf)
     if a is None:
         return None
+    horizon = s.horizon_bars
+    if s.bracket_mode == "vol" and models is not None:
+        v = models.vol(st.symbol, s.decision_tf, horizon)
+        if v:
+            g = v["garch"]
+            sig_h = v["sigma_horizon_bp"]
+            stop = s.sl_sigma * sig_h
+            ref_cost = (costs or {}).get("reference_bp", s.round_trip_cost_bp)
+            floor = max(s.min_sl_bp_vol, ref_cost / s.max_cost_r if s.max_cost_r > 0 else 0.0)
+            floor_bound = stop < floor
+            if floor_bound:
+                stop = floor
+                if s.auto_horizon:
+                    max_h = max(horizon, int(round(horizon * s.max_horizon_mult)))
+                    lo, hi = horizon, max_h
+                    if s.sl_sigma * g.horizon_sigma(hi) * 10000 < stop:
+                        horizon = hi
+                    else:
+                        while lo < hi:  # smallest horizon whose sigma reaches the stop
+                            mid = (lo + hi) // 2
+                            if s.sl_sigma * g.horizon_sigma(mid) * 10000 >= stop:
+                                hi = mid
+                            else:
+                                lo = mid + 1
+                        horizon = lo
+                    sig_h = g.horizon_sigma(horizon) * 10000
+            stop = min(stop, s.max_sl_bp)
+            tp = stop * s.reward_risk
+            return {"sl_bp": round(stop, 1), "tp_bp": round(tp, 1), "atr_pct": a, "reward_risk": round(s.reward_risk, 3),
+                    "horizon_bars": horizon, "sigma_horizon_bp": round(sig_h, 1), "mode": "vol", "cost_floor_bound": floor_bound,
+                    "cost_floor_bp": round(floor, 1)}
     sl_bp = min(max(a * 100 * s.sl_atr, s.min_sl_bp), s.max_sl_bp)
     tp_bp = sl_bp * (s.tp_atr / s.sl_atr)
-    return {"sl_bp": round(sl_bp, 1), "tp_bp": round(tp_bp, 1), "atr_pct": a, "reward_risk": round(tp_bp / sl_bp, 3)}
+    return {"sl_bp": round(sl_bp, 1), "tp_bp": round(tp_bp, 1), "atr_pct": a, "reward_risk": round(tp_bp / sl_bp, 3),
+            "horizon_bars": horizon, "mode": "atr", "cost_floor_bound": a * 100 * s.sl_atr < s.min_sl_bp}
 
 
 BASE_RATE_MIN_WINDOWS = 60
 
 
-def base_rates(bars: list, horizon_bars: int, sl_bp: float, tp_bp: float) -> dict[str, Any] | None:
+BASE_RATE_MAX_WINDOWS = 600
+CONDITIONAL_MIN_WINDOWS = 30
+
+
+def base_rates(bars: list, horizon_bars: int, sl_bp: float, tp_bp: float, entries: set[int] | None = None,
+               min_windows: int = BASE_RATE_MIN_WINDOWS) -> dict[str, Any] | None:
     """Empirical frequencies of every labelled outcome for THIS bracket and horizon on the
     instrument's own recent history (completed windows only: no look-ahead).
 
@@ -92,14 +136,16 @@ def base_rates(bars: list, horizon_bars: int, sl_bp: float, tp_bp: float) -> dic
     information should give, so it is both an anchor for Kairos and the baseline it must beat."""
     from .evaluation.labeler import bracket_outcome, return_bin
 
-    n_win = len(bars) - horizon_bars - 1
-    if n_win < BASE_RATE_MIN_WINDOWS:
+    last = len(bars) - horizon_bars - 1
+    idx = [i for i in range(max(0, last - BASE_RATE_MAX_WINDOWS), last) if entries is None or i in entries]
+    n_win = len(idx)
+    if n_win < min_windows:
         return None
     cnt = {"long": {"target_first": 0, "stop_first": 0, "neither": 0}, "short": {"target_first": 0, "stop_first": 0, "neither": 0}}
     bins = [0] * 7
     up = move = 0
     d = sl_bp / 10000
-    for i in range(n_win):
+    for i in idx:
         entry = bars[i].c
         path = [(b.t, b.o, b.h, b.l, b.c) for b in bars[i + 1: i + 1 + horizon_bars]]
         for side in ("long", "short"):
@@ -109,7 +155,7 @@ def base_rates(bars: list, horizon_bars: int, sl_bp: float, tp_bp: float) -> dic
         up += ret_pct > 0
         move += max(b[2] for b in path) >= entry * (1 + d) or min(b[3] for b in path) <= entry * (1 - d)
     sm = lambda k, n, m: round((k + 1) / (n + m), 4)  # noqa: E731
-    span_h = (bars[-1].t - bars[0].t) / 3_600_000
+    span_h = (bars[-1].t - bars[idx[0]].t) / 3_600_000
     return {
         "lookback_hours": round(span_h, 1),
         "windows": n_win,
@@ -157,11 +203,42 @@ def book_block(st: SymbolState) -> dict[str, Any]:
     }
 
 
-def build_state(store: MarketStore, symbol: str, s: Settings, *, position: dict[str, Any] | None = None, include_news: bool = True) -> tuple[dict[str, Any], dict[str, Any]] | None:
+def session_of(hour_utc: int) -> str:
+    """Trading session by UTC hour (crypto trades 24/7; liquidity follows the big equity sessions)."""
+    if 0 <= hour_utc < 7:
+        return "asia"
+    if 7 <= hour_utc < 13:
+        return "europe"
+    if 13 <= hour_utc < 21:
+        return "us"
+    return "late_us"
+
+
+def flow_score(state: dict[str, Any]) -> float | None:
+    """Direction implied by order flow alone, in [-1, 1]: the mean of the available signals
+    (aggressor share, Hawkes intensity imbalance, book imbalance, queue model). Positive = buyers."""
+    parts: list[float] = []
+    f5 = (state.get("order_flow") or {}).get("last_5m") or {}
+    if f5.get("taker_buy_share") is not None:
+        parts.append(max(-1.0, min(1.0, (f5["taker_buy_share"] - 0.5) * 4)))
+    fd = state.get("flow_dynamics") or {}
+    if fd.get("intensity_imbalance_30s") is not None:
+        parts.append(fd["intensity_imbalance_30s"])
+    ob = state.get("order_book") or {}
+    if ob.get("imbalance_within_25bp") is not None:
+        parts.append(ob["imbalance_within_25bp"])
+    q = ob.get("best_queue") or {}
+    if q.get("p_next_mid_move_up") is not None:
+        parts.append(max(-1.0, min(1.0, (q["p_next_mid_move_up"] - 0.5) * 4)))
+    return round(sum(parts) / len(parts), 3) if parts else None
+
+
+def build_state(store: MarketStore, symbol: str, s: Settings, *, position: dict[str, Any] | None = None, include_news: bool = True,
+                models: Any = None, costs: dict[str, Any] | None = None) -> tuple[dict[str, Any], dict[str, Any]] | None:
     """Return (kairos_state, meta). meta holds numbers the policy/labeler need (not sent)."""
     st = store[symbol]
     dec = st.closed_bars(s.decision_tf)
-    br = bracket(st, s)
+    br = bracket(st, s, models, costs)
     if len(dec) < 60 or br is None:
         return None
     price = float(st.ticker.get("lastPrice") or dec[-1].c)
@@ -177,9 +254,11 @@ def build_state(store: MarketStore, symbol: str, s: Settings, *, position: dict[
     long_ratio, long_ratio_chg = _ls(st)
     f5, f15, f60 = st.flow_window(5), st.flow_window(15), st.flow_window(60)
     l15, l60 = st.liq_window(15), st.liq_window(60)
-    horizon_min = s.horizon_bars * s.decision_tf_minutes
+    horizon_bars = br["horizon_bars"]
+    horizon_min = horizon_bars * s.decision_tf_minutes
 
-    trend = {TF_LABEL[tf]: blk for tf in ("5", "15", "60", "240") if (blk := tf_block(st, tf))}
+    tfs = ("1", "5", "15", "60", "240") if s.decision_tf == "1" else ("5", "15", "60", "240")
+    trend = {TF_LABEL[tf]: blk for tf in tfs if (blk := tf_block(st, tf))}
 
     cov = st.coverage_minutes()
 
@@ -217,6 +296,34 @@ def build_state(store: MarketStore, symbol: str, s: Settings, *, position: dict[
         },
         "order_book": book_block(st),
     }
+    now_s = time.time()
+    fd = st.flow_intensity.features(now_s)
+    if fd and cov >= 5:
+        state["flow_dynamics"] = fd
+    q = st.queue.features(now_s)
+    if q and state["order_book"].get("available", True):
+        state["order_book"]["best_queue"] = q
+    events: list[str] = []
+    vol = regime = None
+    if models is not None:
+        vol = models.vol(symbol, s.decision_tf, horizon_bars)
+        regime = models.regime(symbol, s.decision_tf, horizon_bars)
+        events = models.events(symbol, s.decision_tf, horizon_bars)
+        if vol:
+            state["volatility_forecast"] = {
+                "model": "GARCH(1,1) on decision-timeframe log returns",
+                "sigma_next_bar_pct": _r(vol["sigma_bar_bp"] / 100, 4),
+                "sigma_over_horizon_pct": _r(vol["sigma_horizon_bp"] / 100, 3),
+                "long_run_sigma_per_bar_pct": _r(vol["uncond_sigma_bar_bp"] / 100, 4),
+                "vol_percentile_vs_recent_0_to_1": _r(vol["vol_percentile"], 2),
+                "persistence_alpha_plus_beta": vol["persistence"],
+            }
+        state["regime"] = {k: regime[k] for k in ("regime", "trend", "vol", "efficiency_ratio")}
+        if events:
+            from .analytics import EVENT_TEXT
+            state["market_events_on_last_bar"] = [{"event": e, "meaning": EVENT_TEXT[e]} for e in events]
+    hour = datetime.now(timezone.utc).hour
+    state["session"] = {"name": session_of(hour), "hour_utc": hour}
 
     # cross-market context
     cross: dict[str, Any] = {}
@@ -249,7 +356,17 @@ def build_state(store: MarketStore, symbol: str, s: Settings, *, position: dict[
     if position:
         state["open_position"] = position
 
-    base = base_rates(dec, s.horizon_bars, br["sl_bp"], br["tp_bp"])
+    base = base_rates(dec, horizon_bars, br["sl_bp"], br["tp_bp"])
+    cond = None
+    if models is not None:
+        from .analytics import BAR_EVENTS
+        now_bar_events = set(events) & set(BAR_EVENTS)
+        if now_bar_events:
+            hist = models.bar_event_history(symbol, s.decision_tf)
+            entries = {i for i, b in enumerate(dec) if hist.get(b.t, set()) & now_bar_events}
+            cond = base_rates(dec, horizon_bars, br["sl_bp"], br["tp_bp"], entries, min_windows=CONDITIONAL_MIN_WINDOWS)
+            if cond:
+                cond["given_events"] = sorted(now_bar_events)
     if base:
         state["historical_base_rates"] = {
             "what_this_is": ("How often each outcome actually happened for this exact bracket and horizon on this instrument "
@@ -258,15 +375,30 @@ def build_state(store: MarketStore, symbol: str, s: Settings, *, position: dict[
             **{k: v for k, v in base.items() if k not in ("lookback_hours", "windows")},
         }
 
-    state["trade_plan"] = {
-        "entry": "market order at last_price now",
+    if cond:
+        state["historical_base_rates_after_same_events"] = {
+            "what_this_is": (f"The same frequencies, counted only over past bars on which the same event happened "
+                             f"({', '.join(cond['given_events'])}; {cond['windows']} windows). If this differs from the "
+                             "unconditional base rates, the event has carried information on this instrument."),
+            **{k: v for k, v in cond.items() if k not in ("lookback_hours", "windows", "given_events")},
+        }
+
+    plan = {
+        "entry": ("limit order resting at the best bid (long) or ask (short) now" if s.entry_mode == "maker"
+                  else "market order at last_price now"),
         "long_stop_pct_below_entry": round(br["sl_bp"] / 100, 3),
         "long_target_pct_above_entry": round(br["tp_bp"] / 100, 3),
         "short_stop_pct_above_entry": round(br["sl_bp"] / 100, 3),
         "short_target_pct_below_entry": round(br["tp_bp"] / 100, 3),
         "max_holding_minutes": horizon_min,
-        "round_trip_cost_pct": round(s.round_trip_cost_bp / 100, 3),
     }
+    if costs:
+        plan["cost_pct_if_target_hit"] = round(costs["target_bp"] / 100, 3)
+        plan["cost_pct_if_stopped"] = round(costs["stop_bp"] / 100, 3)
+        plan["cost_pct_if_closed_at_time_limit"] = round(costs["time_bp"] / 100, 3)
+    else:
+        plan["round_trip_cost_pct"] = round(s.round_trip_cost_bp / 100, 3)
+    state["trade_plan"] = plan
     state["glossary"] = {
         "taker_buy_share": "fraction of aggressive (taker) volume that was buying; 0.5 = balanced",
         "net_taker_flow_usd": "taker buy notional minus taker sell notional",
@@ -286,9 +418,29 @@ def build_state(store: MarketStore, symbol: str, s: Settings, *, position: dict[
         "tp_bp": br["tp_bp"],
         "atr_pct": br["atr_pct"],
         "horizon_min": horizon_min,
-        "cost_bp": s.round_trip_cost_bp,
+        "horizon_bars": horizon_bars,
+        "bracket": {k: v for k, v in br.items() if k not in ("sl_bp", "tp_bp", "atr_pct")},
+        "cost_bp": costs["reference_bp"] if costs else s.round_trip_cost_bp,
+        "costs": costs,
         "base_rates": base,
+        "base_rates_given_events": cond,
+        "events": events,
+        "regime": (regime or {}).get("regime"),
+        "vol_state": (regime or {}).get("vol"),
+        "session": session_of(hour),
+        "hour_utc": hour,
+        "flow_score": flow_score(state),
     }
+    if st.bids and st.asks and now_s - st.book_ts < 30:
+        mid = (st.bids[0][0] + st.asks[0][0]) / 2
+        meta["mainnet_spread_bp"] = round(10000 * (st.asks[0][0] - st.bids[0][0]) / mid, 3)
+        meta["depth10_usd"] = min(state["order_book"].get("bid_depth_within_10bp_usd") or 0, state["order_book"].get("ask_depth_within_10bp_usd") or 0)
+    tt = st.testnet_ticker
+    try:
+        tb, ta = float(tt["bid1Price"]), float(tt["ask1Price"])
+        meta["testnet_spread_bp"] = round(10000 * (ta - tb) / ((ta + tb) / 2), 2) if ta > tb > 0 else None
+    except (KeyError, TypeError, ValueError):
+        meta["testnet_spread_bp"] = None
     return state, meta
 
 
@@ -301,11 +453,26 @@ _NEGATE = {
     "change_24h_pct", "net_taker_flow_usd", "large_trade_net_usd", "funding_rate_per_8h_pct",
     "funding_avg_last_3_pct", "mark_minus_index_bp", "accounts_long_share_change_1h",
     "imbalance_within_25bp", "btc_return_1h_pct", "btc_return_4h_pct", "SPX_fut_change_8h_pct",
+    "intensity_imbalance_5s", "intensity_imbalance_30s", "microprice_vs_mid_bp",
 }
 _HUNDRED_MINUS = {"rsi14", "fear_greed_index_0_100", "fear_greed_week_ago"}
-_ONE_MINUS = {"bollinger_position_0_to_1", "range_position_50_bars_0_to_1", "range_position_24h_0_to_1", "taker_buy_share", "accounts_long_share"}
+_ONE_MINUS = {"bollinger_position_0_to_1", "range_position_50_bars_0_to_1", "range_position_24h_0_to_1", "taker_buy_share", "accounts_long_share",
+              "best_queue_imbalance_0_to_1", "p_next_mid_move_up"}
 _SWAP = [("long_liquidations_15m_usd", "short_liquidations_15m_usd"), ("long_liquidations_60m_usd", "short_liquidations_60m_usd"),
-         ("bid_depth_within_10bp_usd", "ask_depth_within_10bp_usd")]
+         ("bid_depth_within_10bp_usd", "ask_depth_within_10bp_usd"), ("buy_trades_per_s_5s", "sell_trades_per_s_5s"),
+         ("buy_branching_ratio", "sell_branching_ratio"), ("buy_excitation_vs_baseline", "sell_excitation_vs_baseline")]
+_EVENT_FLIP = {"range_break_up": "range_break_down", "range_break_down": "range_break_up", "vwap_cross_up": "vwap_cross_down",
+               "vwap_cross_down": "vwap_cross_up", "flow_burst_buy": "flow_burst_sell", "flow_burst_sell": "flow_burst_buy"}
+
+
+def _mirror_rates(hb: dict[str, Any]) -> dict[str, Any]:
+    """The mirrored market's history: long and short swap, up and down swap."""
+    return {
+        **hb,
+        "long_bracket": dict(hb["short_bracket"]), "short_bracket": dict(hb["long_bracket"]),
+        "return_distribution": {f"bin_{i}": hb["return_distribution"][f"bin_{6 - i}"] for i in range(7)},
+        "price_higher_at_horizon": round(1 - hb["price_higher_at_horizon"], 4),
+    }
 
 
 def mirror_state(state: dict[str, Any]) -> dict[str, Any]:
@@ -330,14 +497,23 @@ def mirror_state(state: dict[str, Any]) -> dict[str, Any]:
         return obj
 
     m = walk(state)
-    hb = state.get("historical_base_rates")
-    if hb:  # the mirrored market's history: long and short swap, up and down swap
-        m["historical_base_rates"] = {
-            **hb,
-            "long_bracket": dict(hb["short_bracket"]), "short_bracket": dict(hb["long_bracket"]),
-            "return_distribution": {f"bin_{i}": hb["return_distribution"][f"bin_{6 - i}"] for i in range(7)},
-            "price_higher_at_horizon": round(1 - hb["price_higher_at_horizon"], 4),
-        }
+    for key in ("historical_base_rates", "historical_base_rates_after_same_events"):
+        if state.get(key):
+            m[key] = _mirror_rates(state[key])
+    if state.get("regime"):
+        flip = {"up": "down", "down": "up"}
+        r = dict(m["regime"])
+        r["trend"] = flip.get(r["trend"], r["trend"])
+        r["regime"] = r["regime"].replace("trend_up", "trend_tmp").replace("trend_down", "trend_up").replace("trend_tmp", "trend_down")
+        m["regime"] = r
+    if state.get("market_events_on_last_bar"):
+        from .analytics import EVENT_TEXT
+        m["market_events_on_last_bar"] = [{"event": (e2 := _EVENT_FLIP.get(e["event"], e["event"])), "meaning": EVENT_TEXT[e2]}
+                                          for e in state["market_events_on_last_bar"]]
+        hb = m.get("historical_base_rates_after_same_events")
+        if hb and "what_this_is" in hb:
+            pat = re.compile("|".join(sorted(_EVENT_FLIP, key=len, reverse=True)))
+            hb["what_this_is"] = pat.sub(lambda mt: _EVENT_FLIP[mt.group(0)], hb["what_this_is"])
     m.pop("recent_headlines", None)  # text cannot be mirrored
     m.pop("open_position", None)
     m["last_price"] = state["last_price"]
