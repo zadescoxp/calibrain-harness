@@ -7,8 +7,10 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..quant import FlowIntensity, QueueModel
+
 TIMEFRAMES = ["1", "5", "15", "60", "240"]
-MAX_BARS = 500
+MAX_BARS = 1000
 
 
 @dataclass
@@ -43,6 +45,8 @@ class SymbolState:
     ls_ratio: list[tuple[int, float, float]] = field(default_factory=list)  # (ts_ms, buy_ratio, sell_ratio)
     funding_history: list[tuple[int, float]] = field(default_factory=list)
     instrument: dict[str, Any] = field(default_factory=dict)  # testnet lot/tick filters
+    flow_intensity: FlowIntensity = field(default_factory=FlowIntensity)  # Hawkes-style order-flow intensity
+    queue: QueueModel = field(default_factory=QueueModel)  # best-level queue imbalance model
     stream_since_ms: int = 0  # continuous trade/liquidation stream coverage starts here (reset on reconnect)
     last_update: float = 0.0
 
@@ -80,6 +84,7 @@ class SymbolState:
         minute = ts_ms - ts_ms % 60000
         b = self.flow.setdefault(minute, [0.0] * 7)
         notional = qty * price
+        self.flow_intensity.add(ts_ms / 1000, side)
         if notional >= large_threshold:
             self.large_trades.append((ts_ms, side, qty, price, notional))
         if side == "Buy":
@@ -96,6 +101,12 @@ class SymbolState:
         if len(self.flow) > 300:
             for k in sorted(self.flow)[:-240]:
                 del self.flow[k]
+
+    def minute_flow(self, minutes: int, now_ms: int | None = None) -> list[tuple[int, float]]:
+        """Net taker flow (buy - sell notional) per completed minute, oldest first."""
+        now_ms = now_ms or int(time.time() * 1000)
+        current = now_ms - now_ms % 60000
+        return [(m, self.flow[m][2] - self.flow[m][3]) for m in sorted(self.flow) if current - minutes * 60000 <= m < current]
 
     def flow_window(self, minutes: int, now_ms: int | None = None) -> dict[str, float]:
         now_ms = now_ms or int(time.time() * 1000)
