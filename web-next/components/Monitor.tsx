@@ -207,7 +207,7 @@ function KairosPanel() {
       </div>
       {(["long_bracket", "short_bracket"] as const).map((q) => p[q] && (
         <div className="qb" key={q}>
-          <div className="qt"><span>{q === "long_bracket" ? "Long" : "Short"} bracket</span><span>first touch ≤ {ov?.settings.horizon_minutes}m</span></div>
+          <div className="qt"><span>{q === "long_bracket" ? "Long" : "Short"} bracket</span><span>first touch ≤ {d.horizon_min ?? ov?.settings.horizon_minutes}m</span></div>
           <PBars probs={p[q].probs} labels={{ target_first: `target ${q === "long_bracket" ? "+" : "−"}${fx(tp, 2)}%`, stop_first: `stop ${q === "long_bracket" ? "−" : "+"}${fx(sl, 2)}%`, neither: "neither (time)" }} />
         </div>
       ))}
@@ -216,9 +216,24 @@ function KairosPanel() {
         <div className="kfoot">
           <div data-tip="Calibrated P(price higher at horizon); raw = model alone"><b>P(up) cal · raw</b>{(100 * d.p_up).toFixed(0)}% · {isNum(d.p_up_raw) ? (100 * d.p_up_raw).toFixed(0) + "%" : "—"}</div>
           <div data-tip="Calibrated P(price moves ≥ 1 stop either way within the horizon)"><b>Big move</b>{isNum(d.p_big_move) ? (100 * d.p_big_move).toFixed(0) + "%" : "—"}</div>
-          <div><b>Mean rev · w(model)</b>{p.mean_reversion ? (100 * p.mean_reversion.p).toFixed(0) + "%" : "—"} · {isNum(d.weights?.long_bracket) ? fx(d.weights.long_bracket, 2) : "—"}</div>
+          <div><b>Mean rev · w(model)</b>{p.mean_reversion ? (100 * p.mean_reversion.p).toFixed(0) + "%" : "—"} · {fx(typeof d.weights?.long_bracket === "object" ? d.weights.long_bracket.model : d.weights?.long_bracket, 2)}</div>
         </div>
-      ) : (
+      ) : null}
+      {v2 && d.events !== undefined ? (
+        <div className="kfoot">
+          <div data-tip="Market events on the decision bar. With TRADE TRIGGER = events, trades happen only on these bars."><b>Events</b>{d.events?.length ? d.events.join(", ").replace(/_/g, " ") : "none"}</div>
+          <div data-tip="GARCH volatility state x trend (efficiency ratio)"><b>Regime</b>{d.regime || "—"}</div>
+          <div data-tip={`Order-flow direction score in [-1, 1]; side chosen from ${d.side_source || "model"}${d.symmetrized ? "; answers averaged with the mirrored market" : ""}`}><b>Flow · side from</b>{sg(d.flow_score, 2)} · {d.side_source || "model"}{d.symmetrized ? " · sym" : ""}</div>
+        </div>
+      ) : null}
+      {v2 && d.costs ? (
+        <div className="kfoot">
+          <div data-tip="Cost charged to each outcome: target (maker exit), stop (taker + slippage), time exit"><b>Cost t · s · time</b>{fx(d.costs.target_bp, 1)} · {fx(d.costs.stop_bp, 1)} · {fx(d.costs.time_bp, 1)}bp</div>
+          <div data-tip="How the stop was sized"><b>Bracket</b>{d.bracket?.mode === "vol" ? `${fx(d.bracket.sigma_horizon_bp, 0)}bp σ · ${d.bracket.cost_floor_bound ? "cost floor" : "vol"}` : "ATR"}</div>
+          <div data-tip="Calibrated P(move ≥ 1 stop) against its base rate"><b>Move vs base</b>{isNum(d.p_big_move) ? (100 * d.p_big_move).toFixed(0) : "—"}% · {isNum(d.p_big_move_base) ? (100 * d.p_big_move_base).toFixed(0) : "—"}%</div>
+        </div>
+      ) : null}
+      {!v2 && (
         <div className="kfoot">
           <div><b>Regime</b>{reg ? `${reg[0].replace("_", " ")} ${(100 * reg[1]).toFixed(0)}%` : "—"}</div>
           <div><b>Crowding</b>{crowd ? `${crowd[0].replace("_", " ")} ${(100 * crowd[1]).toFixed(0)}%` : "—"}</div>
