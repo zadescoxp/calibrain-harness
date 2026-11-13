@@ -59,7 +59,7 @@ class TestnetTickerStream:
                             sym = topic.split(".", 1)[1]
                             d = data.get("data") or {}
                             t = self.store[sym].testnet_ticker
-                            for k in ("lastPrice", "markPrice", "bid1Price", "ask1Price"):
+                            for k in ("lastPrice", "markPrice", "bid1Price", "ask1Price", "bid1Size", "ask1Size"):
                                 if d.get(k):
                                     t[k] = d[k]
                             t["ts"] = time.time()
