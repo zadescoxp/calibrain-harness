@@ -137,10 +137,19 @@ TRADE_COLUMNS = {
     "stop_trigger_px": "REAL",   # testnet bid/ask that tripped the managed stop
     "stop_trigger_ts": "REAL",
     "exit_steps": "INTEGER",     # IOC chase steps used to get flat
+    "entry_mode": "TEXT",        # maker (post-only limit) | taker (capped IOC)
+    "entry_wait_ms": "REAL",     # maker: order placed -> filled or cancelled
+    "sizing_json": "TEXT",       # how the risk amount was set (base, confidence, regime, drawdown, correlation)
+    "horizon_min": "INTEGER",    # holding limit of this trade (brackets can extend the horizon)
+    "be_moved_ts": "REAL",       # when the managed stop moved to break-even
+    "mfe_r": "REAL",             # best excursion in R seen while open (mainnet)
+    "regime": "TEXT",
+    "events_json": "TEXT",       # market events on the decision bar
 }
 
 JSON_COLS = {"state_json", "questions_json", "answers_json", "parsed_json", "issues_json", "usage_json",
-             "model_meta_json", "decision_json", "label_json", "probs_json", "fills_json", "config_json"}
+             "model_meta_json", "decision_json", "label_json", "probs_json", "fills_json", "config_json",
+             "sizing_json", "events_json"}
 
 
 class DB:
@@ -169,6 +178,7 @@ class DB:
             if col not in tcols:
                 self.conn.execute(f"ALTER TABLE trades ADD COLUMN {col} {typ}")
         self.conn.execute("UPDATE trades SET mode=notes WHERE mode IS NULL AND notes IN ('exploration','strict')")
+        self.conn.execute("UPDATE trades SET entry_mode='taker' WHERE entry_mode IS NULL")
         if "decision_tf" not in cols:
             self.conn.execute("ALTER TABLE decisions ADD COLUMN decision_tf TEXT")
             # every decision before this column existed was made on the 5m profile (120 min horizon)
