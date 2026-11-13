@@ -74,9 +74,11 @@ def return_bin(ret_pct: float, sl_bp: float) -> int:
     return 6
 
 
-def realized_r(outcome: str, rr: float, ret_pct: float, sl_bp: float, side: str, cost_bp: float) -> float:
-    """Hypothetical bracket result in R, net of round-trip cost."""
-    cost_r = cost_bp / sl_bp
+def realized_r(outcome: str, rr: float, ret_pct: float, sl_bp: float, side: str, cost_bp: Any) -> float:
+    """Hypothetical bracket result in R, net of cost. cost_bp is one flat round-trip cost, or the
+    per-outcome cost model of the decision (costs.CostModel.outcome_costs)."""
+    from ..costs import outcome_cost_bp
+    cost_r = outcome_cost_bp(outcome, cost_bp) / sl_bp
     if outcome == "target_first":
         return rr - cost_r
     if outcome == "stop_first":
@@ -94,7 +96,9 @@ def label_decision(d: dict[str, Any], bars: list[tuple]) -> dict[str, Any] | Non
         return None
     entry, sl_bp, tp_bp = d["price"], d["sl_bp"], d["tp_bp"]
     rr = tp_bp / sl_bp
-    cost_bp = (d.get("decision_json") or {}).get("cost_bp") or (d.get("state_json") or {}).get("trade_plan", {}).get("round_trip_cost_pct", 0.15) * 100
+    dj = d.get("decision_json") or {}
+    cost_bp = ((dj.get("meta") or {}).get("costs") or dj.get("cost_bp")
+               or (d.get("state_json") or {}).get("trade_plan", {}).get("round_trip_cost_pct", 0.15) * 100)
     long_o = bracket_outcome(path, entry, "long", tp_bp, sl_bp)
     short_o = bracket_outcome(path, entry, "short", tp_bp, sl_bp)
     ret_pct = 100 * (path[-1][4] / entry - 1)
@@ -103,6 +107,8 @@ def label_decision(d: dict[str, Any], bars: list[tuple]) -> dict[str, Any] | Non
     label: dict[str, Any] = {
         "long": long_o, "short": short_o, "return_pct": round(ret_pct, 4), "return_bin": return_bin(ret_pct, sl_bp),
         "max_up_pct": round(mfe, 4), "max_down_pct": round(mae, 4), "bars": len(path),
+        # price change k minutes after entry (bp, side-neutral): execution markouts and short-horizon edge
+        "markout_bp": {str(k): round(10000 * (path[k - 1][4] / entry - 1), 2) for k in (1, 5, 15) if len(path) >= k},
         "long_r": round(realized_r(long_o["outcome"], rr, ret_pct, sl_bp, "long", cost_bp), 4),
         "short_r": round(realized_r(short_o["outcome"], rr, ret_pct, sl_bp, "short", cost_bp), 4),
     }
