@@ -221,12 +221,17 @@ class BybitTestnet:
         await self._request("POST", "/v5/position/trading-stop", params)
 
     async def limit_order(self, symbol: str, side: str, qty: str, price: str, *, link_id: str,
-                          reduce_only: bool = True, tif: str = "GTC") -> dict[str, Any]:
-        """Resting limit order (used for take-profits: fills at the target price or better, never worse)."""
-        return await self._request("POST", "/v5/order/create", {
+                          reduce_only: bool = True, tif: str = "GTC", stop_loss: str | None = None,
+                          trigger_by: str = "MarkPrice") -> dict[str, Any]:
+        """Resting limit order. Take-profits: reduce-only GTC (fills at the target or better, never worse).
+        Maker entries: tif="PostOnly" (rejected instead of crossing the spread) with the backstop stop attached."""
+        params: dict[str, Any] = {
             "category": "linear", "symbol": symbol, "side": "Buy" if side == "buy" else "Sell", "orderType": "Limit",
             "qty": qty, "price": price, "positionIdx": 0, "orderLinkId": link_id, "reduceOnly": reduce_only, "timeInForce": tif,
-        })
+        }
+        if stop_loss:
+            params.update({"tpslMode": "Full", "stopLoss": stop_loss, "slTriggerBy": trigger_by})
+        return await self._request("POST", "/v5/order/create", params)
 
     async def cancel_order(self, symbol: str, order_id: str) -> None:
         try:
