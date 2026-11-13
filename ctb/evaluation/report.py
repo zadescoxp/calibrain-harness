@@ -95,6 +95,58 @@ def observations(m: dict[str, Any]) -> list[str]:
     return obs
 
 
+def _bracket_line(sv: dict[str, Any]) -> str:
+    st = sv.get("strategy") or {}
+    if st.get("bracket_mode") == "vol":
+        return (f"- Bracket: stop = {st.get('sl_sigma')} x GARCH(1,1) sigma over the horizon, never below the cost floor "
+                f"(expected cost <= {st.get('max_cost_r')} of the stop; the horizon extends when the floor binds); target = stop x {st.get('reward_risk')}. "
+                f"Entries: {st.get('entry_mode')}. Mirror-symmetrized answers: {st.get('symmetrize')}. Trade trigger: {st.get('trade_trigger')}.")
+    return (f"- Bracket: stop = max({sv['sl_atr']} x ATR({sv['atr_tf']}m), {sv['min_sl_bp']}bp), target = stop x "
+            f"{sv['tp_atr'] / sv['sl_atr']:.2f}, horizon {sv['horizon_minutes']} min, round-trip cost {sv['round_trip_cost_bp']}bp.")
+
+
+def _tbl(rows: list[dict[str, Any]], cols: list[tuple[str, str]]) -> list[str]:
+    if not rows:
+        return ["(no data)", ""]
+    out = ["| " + " | ".join(h for _, h in cols) + " |", "|" + "---|" * len(cols)]
+    for r in rows:
+        out.append("| " + " | ".join(_f(r.get(k)) if isinstance(r.get(k), float) else str(r.get(k, "")) for k, _ in cols) + " |")
+    return out + [""]
+
+
+def validation_section(v: dict[str, Any] | None) -> list[str]:
+    if not v:
+        return []
+    out = ["## Validation (independent windows only)", "",
+           f"{v['decisions']} decisions, {v['labelled']} labelled, {v['independent_windows']} independent windows. {v['method']}.", ""]
+    out += ["### Skill against base rates, per symbol (bracket questions, 90% bootstrap interval)", ""]
+    rows = [{"symbol": sym, **{k: blk['bracket'].get(k) for k in ("independent_windows", "skill", "verdict")},
+             "ci90": blk["bracket"].get("ci90")} for sym, blk in v["per_symbol"].items()]
+    out += _tbl(rows, [("symbol", "Symbol"), ("independent_windows", "Windows"), ("skill", "Skill"), ("ci90", "90% interval"), ("verdict", "Verdict")])
+    cols = [("key", "Group"), ("independent_windows", "Windows"), ("bracket_skill", "Bracket skill"), ("model_side_mean_r", "Model side R"),
+            ("trades", "Trades"), ("trade_pnl", "P&L"), ("trade_win_rate", "Win rate")]
+    for title, key in (("By session (UTC)", "by_session"), ("By hour (UTC)", "by_hour_utc"), ("By regime", "by_regime"), ("By market event", "by_event")):
+        out += [f"### {title}", "", *_tbl(v.get(key) or [], cols)]
+    wf = v.get("walk_forward") or {}
+    out += ["### Walk-forward (expanding window, out of sample)", ""]
+    out += _tbl(wf.get("folds") or [], [("fold", "Fold"), ("train_windows", "Train"), ("test_windows", "Test"), ("weight_model", "Model weight"),
+                                        ("oos_bracket_skill", "OOS skill"), ("policy_trades", "Trades"), ("policy_mean_r", "Mean R"),
+                                        ("base_only_trades", "Base-only trades"), ("base_only_mean_r", "Base-only R")])
+    if wf.get("note"):
+        out += [wf["note"], ""]
+    ec = v.get("edge_vs_cost") or {}
+    out += ["### Edge vs execution cost", ""]
+    out += _tbl([{"set": k, **x} for k, x in ec.items()], [("set", "Set"), ("n", "n"), ("gross_edge_bp", "Gross edge bp"), ("cost_bp", "Cost bp"),
+                                                           ("net_bp", "Net bp"), ("gross_edge_r", "Gross R"), ("cost_r", "Cost R"), ("net_r", "Net R")])
+    d = v.get("drift") or {}
+    out += ["### Drift (Page-Hinkley on Brier(model) - Brier(base))", ""]
+    for g in ("bracket", "direction", "big_move"):
+        if g in d:
+            out.append(f"- {g}: PH {d[g]['ph']} (threshold {d[g]['threshold']}), alarm {d[g]['alarm']}, recent rolling skill {d[g]['recent_skill']}")
+    out.append("")
+    return out
+
+
 def render(m: dict[str, Any], settings_view: dict[str, Any]) -> str:
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     lines = [
@@ -105,15 +157,15 @@ def render(m: dict[str, Any], settings_view: dict[str, Any]) -> str:
         "",
         "## Setup",
         f"- Instruments: {', '.join(settings_view['symbols'])} (Bybit USDT perpetuals). Signals from mainnet public data; orders on Bybit testnet.",
-        f"- One request per closed {settings_view['decision_tf_minutes']}m bar per symbol, 8 questions per request (Kairos V4 limit).",
-        f"- Bracket: stop = max({settings_view['sl_atr']} x ATR({settings_view['atr_tf']}m), {settings_view['min_sl_bp']}bp), target = stop x "
-        f"{settings_view['tp_atr'] / settings_view['sl_atr']:.2f}, horizon {settings_view['horizon_minutes']} min, round-trip cost {settings_view['round_trip_cost_bp']}bp.",
+        f"- One request per closed {settings_view['decision_tf_minutes']}m bar per symbol (7 questions).",
+        _bracket_line(settings_view),
         "- Every prediction is labelled from realised mainnet 1m bars whether or not it was traded, so model skill is measured separately from execution.",
         "",
         "## Findings",
         "",
         *[f"- {o}" for o in observations(m)],
         "",
+        *validation_section(m.get("validation")),
         "## Raw metrics",
         "",
         "```json",
