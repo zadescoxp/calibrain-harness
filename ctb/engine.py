@@ -14,9 +14,13 @@ import aiohttp
 
 from .broker.bybit_private_ws import BybitPrivateStream
 from .broker.bybit_rest import BybitTestnet
+from .analytics import MarketModels
 from .broker.executor import Executor
 from . import runs as runs_mod
 from .calibration import Calibrator
+from .costs import CostModel
+from .ensemble import symmetrize
+from .evaluation import validation
 from .config import Settings, save_env
 from .db import DB
 from .evaluation.labeler import Labeler
@@ -29,7 +33,8 @@ from .market.bybit_public import BybitPublicFeed
 from .market.context import ContextFeed
 from .market.store import MarketStore
 from .market.testnet_ws import TestnetTickerStream
-from .policy import decide
+from .models import get as get_model
+from .policy import decide, risk_pct_for
 
 log = logging.getLogger("ctb.engine")
 
@@ -50,8 +55,16 @@ class Engine:
         self.started_at = time.time()
         self.tasks: list[asyncio.Task] = []
         self.last_decision_error: str | None = None
-        self.calibrator = Calibrator(self.db, tf_fn=lambda: self.s.decision_tf, provider_fn=lambda: self.s.model_provider)
+        self.calibrator = Calibrator(self.db, tf_fn=lambda: self.s.decision_tf, provider_fn=lambda: self.s.model_provider,
+                                     sources_fn=lambda: ("model", *self._ensemble_names()))
         self.kairos_sem = asyncio.Semaphore(max(1, s.kairos_concurrency))
+        self.models = MarketModels(self.store)
+        self.costs = CostModel(s, self.db)
+        self.validation: dict[str, Any] = {}
+        self.validated: dict[str, dict[str, Any]] = {}
+        self.drift_state: dict[str, Any] = {}
+        self.members: dict[str, SystemOneClient] = {}
+        self.member_budgets: dict[str, RateBudget] = {}
 
     # ------------------------------------------------------------------ pub/sub
     def emit(self, kind: str, data: dict[str, Any]) -> None:
@@ -67,6 +80,7 @@ class Engine:
         self.context = ContextFeed(self.store, self.session)
         self.kairos = self._model_client()  # the active classification model (attribute name kept for history)
         self.labeler = Labeler(self.db, self.session, self.emit)
+        self._build_members()
         self.feed.on_bar_close.append(self.on_bar_close)
         self.testnet_stream = TestnetTickerStream(self.store, self.session, self.s.symbols)
         self.testnet_stream.on_tick.append(self._on_testnet_tick)
@@ -92,6 +106,8 @@ class Engine:
             asyncio.create_task(self.context.loop(), name="context"),
             asyncio.create_task(self.labeler.loop(), name="labeler"),
             asyncio.create_task(self._preview_loop(), name="preview"),
+            asyncio.create_task(self.models.loop(), name="models"),
+            asyncio.create_task(self._validation_loop(), name="validation"),
         ]
         self.db.event("info", "started", f"engine started; model={self.s.model_spec.label} ({self.kairos.model}) "
                                          f"{'ready' if self.kairos.configured else 'NOT CONFIGURED'}; "
@@ -117,6 +133,7 @@ class Engine:
         self.executor.price_fn = lambda sym: self.store[sym].testnet_ticker
         self.executor.mainnet_fn = lambda sym: self.store[sym].ticker
         self.executor.mainnet_age_fn = lambda sym: self.store[sym].last_update
+        self.executor.corr_fn = self.models.corr_with
         if getattr(self, "_stop_task", None):
             self._stop_task.cancel()
         self._stop_task = asyncio.create_task(self._stop_watch(), name="stop_watch")
@@ -184,6 +201,26 @@ class Engine:
         self.emit("event", self.db.event("warn", "model", f"model switched to {spec.label} ({self.kairos.model}); started {self.run['name']}"))
         self.emit("settings", {"model_provider": provider})
         return {"ok": True, "model_provider": provider, "model_id": self.kairos.model, "run": self.run}
+
+    async def set_strategy(self, updates: dict[str, Any]) -> dict[str, Any]:
+        """Change strategy settings. Only while flat, and a new run starts, so every run's results come
+        from one strategy configuration."""
+        from . import runs as runs_mod
+        if self.db.one("SELECT id FROM trades WHERE status IN ('open','opening') LIMIT 1"):
+            raise ValueError("close the open bot trades first (KILL, or wait for their exits): a run must not mix two strategies")
+        before = self.s.strategy_view()
+        env = self.s.set_strategy(updates)
+        if not env:
+            return {"ok": True, "unchanged": True, "strategy": before}
+        save_env(env)
+        self._build_members()
+        self.calibrator.refit()
+        changed = {k: v for k, v in self.s.strategy_view().items() if before.get(k) != v}
+        self.run = runs_mod.start(self.db, self.s)
+        self.emit("event", self.db.event("warn", "strategy", f"strategy changed ({', '.join(f'{k}={v}' for k, v in changed.items())}); "
+                                                            f"started {self.run['name']}"))
+        self.emit("settings", {"strategy": self.s.strategy_view()})
+        return {"ok": True, "strategy": self.s.strategy_view(), "changed": changed, "run": self.run}
 
     async def set_model_key(self, provider: str, api_key: str) -> dict[str, Any]:
         """Save a model API key, then test it with one tiny request against that model."""
@@ -256,7 +293,7 @@ class Engine:
             for sym in self.s.symbols:
                 try:
                     pos = self.executor.position_summary(sym) if self.executor else None
-                    built = build_state(self.store, sym, self.s, position=pos)
+                    built = build_state(self.store, sym, self.s, position=pos, models=self.models, costs=self.costs.outcome_costs())
                     if built:
                         self.latest_state[sym] = {"state": built[0], "meta": built[1], "ts": time.time()}
                 except Exception as exc:  # noqa: BLE001
@@ -272,34 +309,104 @@ class Engine:
         await asyncio.sleep(self.s.bar_settle_s)  # let the last trades of the closed bar arrive
         await self.decide(symbol)
 
+    # ------------------------------------------------------------------ ensemble members and validation
+    def _ensemble_names(self) -> tuple[str, ...]:
+        return tuple(m for m in self.s.ensemble if m != self.s.model_provider and m in self.members)
+
+    def _build_members(self) -> None:
+        """Extra models asked alongside the primary on the real state (not mirrored, to bound cost)."""
+        self.members = {}
+        for name in self.s.ensemble:
+            if name == self.s.model_provider:
+                continue
+            try:
+                spec = get_model(name)
+            except KeyError:
+                continue
+            if not spec.api_key:
+                continue
+            self.members[name] = SystemOneClient(spec, self.session, timeout_s=self.s.kairos_timeout_s, max_retries=1)
+            self.member_budgets.setdefault(name, RateBudget(self.s.ensemble_max_rph))
+
+    async def _validation_loop(self) -> None:
+        """Refresh per-symbol validation and drift for the active model and timeframe every few minutes.
+        Validation reads all runs of this model and timeframe: skill is a property of the model, not the run."""
+        while True:
+            try:
+                v = await asyncio.to_thread(validation.compute, self.db, model=self.s.model_provider, decision_tf=self.s.decision_tf)
+                self.validation = v
+                self.validated = v["validated"]
+                self.drift_state = {"alarm": v["drift"]["alarm"], "questions": v["drift"]["questions"]}
+                if self.s.drift_action in ("base", "pause"):
+                    self.calibrator.set_overrides({q: "drift" for q in v["drift"]["questions"]})
+                else:
+                    self.calibrator.set_overrides({})
+                if v["drift"]["alarm"] and not getattr(self, "_drift_noted", False):
+                    self._drift_noted = True
+                    self.emit("event", self.db.event("warn", "model_drift",
+                                                     f"drift detected on {', '.join(v['drift']['questions'])}; action: {self.s.drift_action}"))
+                elif not v["drift"]["alarm"]:
+                    self._drift_noted = False
+            except Exception as exc:  # noqa: BLE001
+                log.warning("validation: %s", exc)
+            await asyncio.sleep(300)
+
+    def _planned_notional(self, sl_bp: float, price: float) -> float | None:
+        if not self.executor or not self.executor.wallet.get("equity"):
+            return None
+        eq = float(self.executor.wallet["equity"])
+        pct, _ = risk_pct_for(self.s, exploration=self.s.exploration_mode)
+        return min(eq * pct / 100 / (sl_bp / 10000), self.s.max_notional_usdt, eq * self.s.max_leverage * 0.9)
+
     async def decide(self, symbol: str, *, force_probe: bool = False) -> dict[str, Any] | None:
         if symbol in self.inflight:
             return None
         if not self.kairos.configured:
             return None
         if not self.budget.try_take():
-            self.emit("event", self.db.event("warn", "budget", f"Kairos hourly budget ({self.s.kairos_max_requests_per_hour}) exhausted; skipped {symbol}", symbol))
+            self.emit("event", self.db.event("warn", "budget", f"model hourly budget ({self.s.kairos_max_requests_per_hour}) exhausted; skipped {symbol}", symbol))
             return None
         self.inflight.add(symbol)
         try:
             pos = self.executor.position_summary(symbol) if self.executor else None
-            built = build_state(self.store, symbol, self.s, position=pos)
+            costs = self.costs.outcome_costs()
+            built = build_state(self.store, symbol, self.s, position=pos, models=self.models, costs=costs)
             if not built:
                 self.db.event("warn", "state", "not enough data to build state", symbol)
                 return None
             state, meta = built
             if meta.get("testnet_price"):
                 meta["venue_divergence_bp"] = round(10000 * (meta["testnet_price"] / meta["price"] - 1), 1)
+            meta["planned_notional"] = self._planned_notional(meta["sl_bp"], meta["price"])
+            meta["validated"] = self.validated.get(symbol) or {"ok": False, "why": "no validation for this symbol yet"}
+            meta["drift"] = self.drift_state
             questions = build_questions(meta["sl_bp"], meta["tp_bp"], meta["horizon_min"])
+
+            mirror_task = None
+            if self.s.symmetrize and self.budget.try_take():
+                mirror_task = asyncio.create_task(self._ask_raw(mirror_state(state), questions))
+            member_tasks = {name: asyncio.create_task(self._ask_raw(state, questions, client=c))
+                            for name, c in self.members.items() if self.member_budgets[name].try_take()}
             row = await self._ask(symbol, state, questions, meta, probe=None)
+            mirror_parsed, members = None, {}
+            if mirror_task:
+                res = await mirror_task
+                mirror_parsed = res.get("parsed")
+                await self._store_probe(symbol, mirror_state(state), questions, meta, res, probe="mirror_pair", probe_of=row["id"])
+            for name, t in member_tasks.items():
+                res = await t
+                if res.get("parsed"):
+                    members[name] = res["parsed"]
             if row.get("parsed_json") is not None:
                 try:
                     weights = self.calibrator.maybe_refit()
                 except Exception as exc:  # noqa: BLE001
                     weights = self.calibrator.weights
                     self.db.event("error", "calibration", f"calibration refit failed: {exc}", symbol)
-                decision = decide(row["parsed_json"], meta, self.s, has_position=pos is not None, weights=weights)
-                dj = {**decision.as_dict(), "cost_bp": meta["cost_bp"], "meta": meta}
+                used = symmetrize(row["parsed_json"], mirror_parsed)
+                decision = decide(used, meta, self.s, has_position=pos is not None, weights=weights, members=members)
+                dj = {**decision.as_dict(), "cost_bp": meta["cost_bp"], "meta": meta, "parsed_used": used,
+                      "symmetrized": mirror_parsed is not None, "members": members}
                 self.db.update("decisions", row["id"], {"decision_json": dj, "action": decision.action})
                 row.update(decision_json=dj, action=decision.action)
                 self.emit("decision", self._decision_view(row))
@@ -307,7 +414,8 @@ class Engine:
                     ev = decision.ev_long_r if decision.action == "long" else decision.ev_short_r
                     res = await self.executor.open(symbol=symbol, side=decision.action, sl_bp=meta["sl_bp"], tp_bp=meta["tp_bp"],
                                                    decision_id=row["id"], ev_r=ev or 0.0, exploration=decision.exploration,
-                                                   decision_price=meta["price"])
+                                                   decision_price=meta["price"], horizon_min=meta["horizon_min"],
+                                                   vol_state=meta.get("vol_state"), regime=meta.get("regime"), events=meta.get("events"))
                     if not res.get("ok"):
                         self.emit("event", self.db.event("info", "signal_not_traded", f"{decision.action} signal not traded: {res.get('reason')}", symbol))
             else:
@@ -317,6 +425,34 @@ class Engine:
             return row
         finally:
             self.inflight.discard(symbol)
+
+    async def _ask_raw(self, state: dict, questions: dict, client: SystemOneClient | None = None) -> dict[str, Any]:
+        """One request whose answer is used inside a decision (mirror leg, ensemble member)."""
+        client = client or self.kairos
+        try:
+            async with self.kairos_sem:
+                res = await client.ask(state, questions)
+            parsed, issues = validate(res.answers, questions)
+            return {"res": res, "parsed": parsed if all(q in parsed for q in ("long_bracket", "short_bracket")) else None, "issues": issues}
+        except KairosError as exc:
+            return {"error": exc}
+
+    async def _store_probe(self, symbol: str, state: dict, questions: dict, meta: dict, out: dict[str, Any], *, probe: str, probe_of: int) -> None:
+        row: dict[str, Any] = {
+            "ts": time.time(), "symbol": symbol, "bar_time": meta.get("bar_time"), "qset_version": QUESTION_SET_VERSION,
+            "probe": probe, "probe_of": probe_of, "decision_tf": self.s.decision_tf, "run_id": self.run["id"],
+            "model_provider": self.s.model_provider, "state_json": state, "questions_json": questions, "price": meta["price"],
+            "sl_bp": meta["sl_bp"], "tp_bp": meta["tp_bp"], "horizon_min": meta["horizon_min"],
+        }
+        if out.get("error"):
+            exc = out["error"]
+            row.update(error_kind=exc.kind, error_msg=exc.message[:1000], request_id=exc.request_id)
+        else:
+            res = out["res"]
+            row.update(answers_json=res.answers, parsed_json=out.get("parsed"), issues_json=out.get("issues"), usage_json=res.usage,
+                       model_meta_json=res.metadata, latency_ms=round(res.latency_ms, 1), attempts=res.attempts,
+                       request_bytes=res.request_bytes)
+        self.db.insert("decisions", row)
 
     async def _ask(self, symbol: str, state: dict, questions: dict, meta: dict, *, probe: str | None, probe_of: int | None = None) -> dict[str, Any]:
         row: dict[str, Any] = {
@@ -346,6 +482,9 @@ class Engine:
         if not self.budget.try_take():
             return
         await self._ask(symbol, state, questions, meta, probe="repeat", probe_of=live_id)
+        if self.s.symmetrize:
+            self.emit("probe", {"symbol": symbol, "live_id": live_id})
+            return  # every decision already has its mirrored pair
         if not (self.budget.try_take() and self.budget.try_take()):
             return
         base = {k: v for k, v in state.items() if k not in ("recent_headlines", "open_position")}
@@ -388,11 +527,17 @@ class Engine:
             "ev_long_r": dj.get("ev_long_r"), "ev_short_r": dj.get("ev_short_r"), "setup_quality": dj.get("setup_quality"),
             "data_sufficient": dj.get("data_sufficient"), "coherence": dj.get("coherence"), "expected_move_in_d": dj.get("expected_move_in_d"),
             "latency_ms": d.get("latency_ms"), "error_kind": d.get("error_kind"), "error_msg": d.get("error_msg"),
-            "issues": d.get("issues_json"), "parsed": d.get("parsed_json"), "price": d.get("price"), "sl_bp": d.get("sl_bp"),
+            "issues": d.get("issues_json"), "parsed": dj.get("parsed_used") or d.get("parsed_json"), "parsed_raw": d.get("parsed_json"),
+            "price": d.get("price"), "sl_bp": d.get("sl_bp"),
             "tp_bp": d.get("tp_bp"), "label": d.get("label_json"), "probe": d.get("probe"),
             "exploration": dj.get("exploration", False), "strict_action": dj.get("strict_action"),
             "ev_long_raw_r": dj.get("ev_long_raw_r"), "ev_short_raw_r": dj.get("ev_short_raw_r"),
             "ev_long_base_r": dj.get("ev_long_base_r"), "ev_short_base_r": dj.get("ev_short_base_r"),
             "p_up": dj.get("p_up"), "p_up_raw": dj.get("p_up_raw"), "p_big_move": dj.get("p_big_move"),
             "weights": dj.get("weights"), "qset": d.get("qset_version"),
+            "events": dj.get("events") or [], "regime": dj.get("regime"), "side_source": dj.get("side_source"),
+            "flow_score": dj.get("flow_score"), "model_side": dj.get("model_side"), "symmetrized": dj.get("symmetrized"),
+            "gate_kinds": dj.get("gate_kinds"), "horizon_min": d.get("horizon_min"),
+            "costs": (dj.get("meta") or {}).get("costs"), "bracket": (dj.get("meta") or {}).get("bracket"),
+            "p_big_move_base": dj.get("p_big_move_base"),
         }
