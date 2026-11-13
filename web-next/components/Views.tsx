@@ -144,12 +144,12 @@ export function EvalView() {
                 {Object.entries<any>(vb).map(([k, r]) => (
                   <tr key={k}><td className="amb">{k}</td><td className="r">{r.n}</td><td className="r">{fx(r.brier_kairos, 4)}</td><td className="r">{fx(r.brier_base_rates, 4)}</td>
                     <td className={`r ${ud(r.kairos_skill_vs_base)}`}>{sg(r.kairos_skill_vs_base, 3)}</td><td className="r">{fx(r.best_w, 2)}</td>
-                    <td className="r">{fx(cw.weights?.[k], 2)}{cw.report?.[k]?.fitted ? "" : " prior"}</td></tr>
+                    <td className="r">{fx(typeof cw.weights?.[k] === "object" ? cw.weights[k].model : cw.weights?.[k], 2)}{cw.report?.[k]?.fitted ? "" : " prior"}</td></tr>
                 ))}
               </tbody>
             </table>
           ) : <div className="empty">Needs labelled v2 decisions (each is scored after its horizon)</div>}
-          <div className="muted" style={{ padding: "4px 8px" }}>Decisions use w · model + (1 − w) · base rates. w is fitted on labelled outcomes once a question has 100; until then it is 0.5. Skill &gt; 0 = the model adds information beyond the base rates. Weights are fitted per model and per trading timeframe.</div>
+          <div className="muted" style={{ padding: "4px 8px" }}>Decisions use w · model + (1 − w) · base rates. w is fitted on independent (non-overlapping) labelled windows once a question has 30; until then it is 0.5. Long and short brackets share one weight. Skill &gt; 0 = the model adds information beyond the base rates. Weights are fitted per model and per trading timeframe. The VALID screen (F6) has intervals, splits and walk-forward results.</div>
         </Panel>
         <Panel code="PRB" title="Consistency probes" tight><KV rows={[
           ["Repeat probes", cons.repeat_probes], ["Identical answers", fx(cons.repeat_identical_share, 3)], ["Mean max |Δp| on repeat", fx(cons.repeat_max_abs_prob_diff_mean, 4)],
