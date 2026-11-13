@@ -33,6 +33,7 @@ export function Modals() {
   if (modal.kind === "help") return <HelpModal />;
   if (modal.kind === "tf") return <TfModal tf={modal.data} />;
   if (modal.kind === "universe") return <UniverseModal />;
+  if (modal.kind === "strategy") return <StrategyModal />;
   return null;
 }
 
@@ -68,7 +69,8 @@ function HelpModal() {
     ["BTC · ETH · SOL …", "Load a symbol into chart, model signal, book and stats"], ["ASK", "Ask the active model now for the loaded symbol (1 request)"],
     ["PRB", "Ask + repeat & mirror consistency probes (4 requests)"], ["1M 5M 15M 1H 4H", "Chart timeframe (view only)"],
     ["POS 10", "Max open positions (1–50); new entries only"], ["TF 1M · TF 5M · TF 15M · TF 1H", "Trading timeframe: how often the model decides and trades"], ["MODEL", "Kairos or Jev: switch in the function-key bar (starts a new run)"],
-    ["UNIV", "Choose the symbols the bot watches and trades"], ["MON EVAL TRD NEWS LOG", "Switch screen (also F1–F5)"], ["KEYS · HELP", "API credentials · this list"], ["/", "Focus the command line from anywhere"],
+    ["UNIV", "Choose the symbols the bot watches and trades"], ["STRAT", "Strategy: brackets, entries, mirror averaging, triggers, filters, sizing"],
+    ["MON EVAL VALID TRD NEWS LOG", "Switch screen (F1 F2 F6 F3 F4 F5)"], ["KEYS · HELP", "API credentials · this list"], ["/", "Focus the command line from anywhere"],
   ];
   return (
     <Dialog className="keys">
@@ -293,6 +295,78 @@ function UniverseModal() {
           : <button className="kbtn amber" disabled={busy || !changed || !sel.length} onClick={() => apply(false)}>APPLY {sel.length} SYMBOLS</button>}
         <button className="kbtn" onClick={() => setState({ modal: null })}>CANCEL</button>
         <span className="muted">Applying saves to .env and restarts the service (~15 s). Open positions keep being managed; a symbol with an open bot trade cannot be removed. Auto-trade stays as it is.</span>
+      </div>
+    </Dialog>
+  );
+}
+
+/* ---------------------------------------------------------------- strategy */
+type Field = { k: string; label: string; help: string; kind: "choice" | "bool" | "num" | "list"; choices?: string[]; step?: number };
+const FIELDS: Field[] = [
+  { k: "bracket_mode", label: "Bracket", kind: "choice", choices: ["vol", "atr"], help: "vol: stop = SL σ × GARCH volatility over the horizon, never so tight that costs exceed MAX COST of it. atr: the original 1.5 × ATR stop with a 40bp floor." },
+  { k: "sl_sigma", label: "Stop (σ over horizon)", kind: "num", step: 0.1, help: "Stop distance in standard deviations of the forecast move over the holding time." },
+  { k: "reward_risk", label: "Reward : risk", kind: "num", step: 0.1, help: "Target = stop × this." },
+  { k: "max_cost_r", label: "Max cost (share of stop)", kind: "num", step: 0.05, help: "Expected execution cost may be at most this share of the stop. 0.2 = fees and slippage use ≤ 20% of 1R." },
+  { k: "auto_horizon", label: "Extend horizon", kind: "bool", help: "When the cost floor makes the stop wider than the volatility stop, hold longer so the target stays reachable." },
+  { k: "entry_mode", label: "Entries", kind: "choice", choices: ["maker", "taker"], help: "maker: post-only limit at the best bid/ask (maker fee, no slippage), cancelled after the wait. taker: capped IOC." },
+  { k: "maker_wait_s", label: "Maker wait (s)", kind: "num", step: 5, help: "How long a maker entry rests before it is cancelled." },
+  { k: "symmetrize", label: "Mirror averaging", kind: "bool", help: "Ask every decision on the real and the mirrored market and average: cancels any built-in long/short bias. Doubles requests." },
+  { k: "trade_trigger", label: "Trade trigger", kind: "choice", choices: ["events", "every_bar"], help: "events: trade only on bars with a market event (volume spike, range break, VWAP cross, flow burst, liquidation burst…). Decisions are still scored every bar." },
+  { k: "direction_source", label: "Direction from", kind: "choice", choices: ["model", "flow", "agree"], help: "model: the calibrated EV picks the side. flow: order flow picks it. agree: trade only when both agree." },
+  { k: "require_big_move", label: "Need a likely move", kind: "bool", help: "Trade only when the calibrated P(move ≥ 1 stop) is above its base rate." },
+  { k: "require_validated", label: "Need validated skill", kind: "bool", help: "Strict trades only on symbols whose bracket skill interval is above 0 (VALID screen)." },
+  { k: "drift_action", label: "On drift", kind: "choice", choices: ["base", "pause", "alert"], help: "base: drop the model's weight to 0 for that question. pause: stop trading. alert: log only." },
+  { k: "dynamic_sizing", label: "Dynamic sizing", kind: "bool", help: "Scale risk by edge, volatility regime, run drawdown and correlation with open same-side positions." },
+  { k: "be_trigger_r", label: "Break-even at (R)", kind: "num", step: 0.25, help: "Move the stop to break-even once the trade is this many R in profit on mainnet. 0 = off." },
+  { k: "max_spread_bp", label: "Max mainnet spread (bp)", kind: "num", step: 1, help: "Liquidity filter." },
+  { k: "min_depth_mult", label: "Min depth × our size", kind: "num", step: 1, help: "Mainnet depth within 10bp must be at least this multiple of our notional." },
+  { k: "allowed_regimes", label: "Allowed regimes", kind: "list", help: "Comma list, e.g. trend_up/normal_vol,range/low_vol. Empty = all." },
+  { k: "ensemble", label: "Extra models", kind: "list", help: "Comma list of other models asked on the real state and blended, e.g. kairos. Weights are fitted per source." },
+];
+
+function StrategyModal() {
+  const [cur, setCur] = useState<any>(null);
+  const [draft, setDraft] = useState<any>({});
+  const [msg, setMsg] = useState<string | null>(null);
+  const [costs, setCosts] = useState<any>(null);
+  useEffect(() => {
+    api("/api/strategy").then((r: any) => { setCur(r.strategy); setDraft(r.strategy); setCosts(r.costs); }).catch((e) => setMsg(e.message));
+  }, []);
+  if (!cur) return <Dialog className="keys"><div className="ph"><span className="code">STRAT</span>Strategy</div><p>{msg || "Loading…"}</p></Dialog>;
+  const changed = FIELDS.filter((f) => JSON.stringify(draft[f.k]) !== JSON.stringify(cur[f.k]));
+  const apply = async () => {
+    const body: any = {};
+    changed.forEach((f) => (body[f.k] = draft[f.k]));
+    try {
+      const r: any = await post("/api/strategy", body);
+      setMsg(r.unchanged ? "Nothing changed." : `Saved. Started ${r.run?.name}.`);
+      setCur(r.strategy); setDraft(r.strategy);
+      loadOverview();
+    } catch (e: any) {
+      setMsg(e.message);
+    }
+  };
+  const input = (f: Field) => {
+    const v = draft[f.k];
+    if (f.kind === "bool") return <button className={`kbtn ${v ? "amber" : ""}`} onClick={() => setDraft({ ...draft, [f.k]: !v })}>{v ? "ON" : "OFF"}</button>;
+    if (f.kind === "choice") return <span className="seg">{f.choices!.map((c) => <button key={c} className={v === c ? "on" : ""} onClick={() => setDraft({ ...draft, [f.k]: c })}>{c.toUpperCase()}</button>)}</span>;
+    if (f.kind === "list") return <input value={(v || []).join(",")} onChange={(e) => setDraft({ ...draft, [f.k]: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })} />;
+    return <input type="number" step={f.step} value={v} onChange={(e) => setDraft({ ...draft, [f.k]: Number(e.target.value) })} />;
+  };
+  return (
+    <Dialog className="keys strat">
+      <div className="ph"><span className="code">STRAT</span>Strategy · applies while flat and starts a new run</div>
+      <table className="t" style={{ marginTop: 6 }}>
+        <tbody>{FIELDS.map((f) => (
+          <tr key={f.k} className={changed.includes(f) ? "sel" : ""}><td className="amb">{f.label}</td><td>{input(f)}</td><td className="wrap muted">{f.help}</td></tr>
+        ))}</tbody>
+      </table>
+      {costs && <p className="muted" style={{ margin: "8px 10px 0" }}>Cost per outcome now ({costs.entry_mode} entries): target {fx(costs.target_bp, 1)}bp · stop {fx(costs.stop_bp, 1)}bp · time exit {fx(costs.time_bp, 1)}bp. Slippage is {costs.source?.stop_slip === "measured" ? "measured from recent trades" : "a default until enough trades are measured"}.</p>}
+      {msg && <div className="warnbox">{msg}</div>}
+      <div className="keyactions" style={{ margin: "8px 10px" }}>
+        <button className="kbtn amber" disabled={!changed.length} onClick={apply}>APPLY {changed.length ? `(${changed.length})` : ""}</button>
+        <button className="kbtn" onClick={() => setDraft(cur)}>RESET</button>
+        <button className="kbtn" onClick={() => setState({ modal: null })}>CLOSE</button>
       </div>
     </Dialog>
   );
