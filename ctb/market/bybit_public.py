@@ -60,7 +60,7 @@ class BybitPublicFeed:
         st = self.store[symbol]
         for tf in TIMEFRAMES:
             try:
-                res = await self._get(MAINNET_REST, "/v5/market/kline", {"category": "linear", "symbol": symbol, "interval": tf, "limit": 400})
+                res = await self._get(MAINNET_REST, "/v5/market/kline", {"category": "linear", "symbol": symbol, "interval": tf, "limit": 1000})
                 rows = sorted(res["list"], key=lambda r: int(r[0]))
                 now_ms = int(time.time() * 1000)
                 tf_ms = int(tf) * 60000
@@ -245,6 +245,8 @@ class BybitPublicFeed:
         st.bids = sorted(getattr(st, "_bid_map", {}).items(), reverse=True)[:50]
         st.asks = sorted(getattr(st, "_ask_map", {}).items())[:50]
         st.book_ts = time.time()
+        if st.bids and st.asks:
+            st.queue.update(st.bids[0], st.asks[0], st.book_ts)
 
     def stop(self) -> None:
         self._stop.set()
