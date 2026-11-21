@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import random
 import time
 from datetime import datetime, timezone
@@ -34,6 +35,8 @@ from .market.context import ContextFeed
 from .market.store import MarketStore
 from .market.testnet_ws import TestnetTickerStream
 from .models import get as get_model
+from . import venue as venue_mod
+from .venue import get as venue_get
 from .policy import decide, risk_pct_for
 
 log = logging.getLogger("ctb.engine")
@@ -151,12 +154,66 @@ class Engine:
         old_task = getattr(self, "_reconcile_task", None)
         if old_task:
             old_task.cancel()
-        save_env({"BYBIT_API_KEY": api_key, "BYBIT_API_SECRET": api_secret})
+        v = venue_get()
+        save_env({v["key_env"]: api_key, v["secret_env"]: api_secret})
+        os.environ[v["key_env"]], os.environ[v["secret_env"]] = api_key, api_secret  # survives a venue switch back
         self.s.bybit_api_key, self.s.bybit_api_secret = api_key, api_secret
         self.s.trading_enabled = False  # new account starts observe-only
         await self._start_executor()
-        self.emit("event", self.db.event("warn", "keys", "Bybit testnet keys updated from dashboard; trading set to observe-only"))
+        self.emit("event", self.db.event("warn", "keys", f"{venue_get()['label']} keys updated from dashboard; trading set to observe-only"))
         return {"ok": True, "equity": wallet.get("equity")}
+
+    async def _stop_executor(self) -> None:
+        """Stop everything bound to the current Bybit account: reconcile loop, stop watcher, private stream."""
+        for attr in ("_reconcile_task", "_stop_task", "_private_task"):
+            task = getattr(self, attr, None)
+            if task:
+                task.cancel()
+            setattr(self, attr, None)
+        stream = getattr(self, "_private_stream", None)
+        if stream:
+            stream.stop()
+        self._private_stream = None
+        self.executor = None
+
+    def _restart_venue_prices(self) -> None:
+        """Reconnect the venue ticker stream to the current venue and drop the old venue's prices."""
+        self.testnet_stream.stop()
+        for task in self.tasks:
+            if task.get_name() == "testnet_ws":
+                task.cancel()
+        for sym in self.s.symbols:
+            self.store[sym].testnet_ticker = {}
+        self.testnet_stream = TestnetTickerStream(self.store, self.session, self.s.symbols)
+        self.testnet_stream.on_tick.append(self._on_testnet_tick)
+        self.tasks = [t for t in self.tasks if t.get_name() != "testnet_ws"]
+        self.tasks.append(asyncio.create_task(self.testnet_stream.run(), name="testnet_ws"))
+
+    async def set_venue(self, venue: str) -> dict[str, Any]:
+        """Switch where orders go (testnet or demo). Only while flat: open trades live on the current
+        account. Trading turns off and a new run starts, so a run never mixes two venues."""
+        from . import runs as runs_mod
+        if venue not in venue_mod.VENUES:
+            raise ValueError(f"unknown venue {venue!r}; choose one of {', '.join(venue_mod.VENUES)}")
+        if venue == venue_mod.name():
+            return {"ok": True, "unchanged": True, "venue": venue}
+        if self.db.one("SELECT id FROM trades WHERE status IN ('open','opening') LIMIT 1"):
+            raise ValueError("close the open bot trades first (KILL, or wait for their exits): they live on the current venue's account")
+        self.s.trading_enabled = False
+        await self._stop_executor()
+        os.environ["CTB_VENUE"] = venue
+        save_env({"CTB_VENUE": venue})
+        self.s.bybit_api_key, self.s.bybit_api_secret = venue_mod.keys(venue)
+        self._restart_venue_prices()
+        if self.s.bybit_api_key and self.s.bybit_api_secret:
+            await self._start_executor()
+        label = venue_get()["label"]
+        self.run = runs_mod.start(self.db, self.s)
+        keys_note = "" if self.executor else f"; no {label} keys yet, add them under KEYS"
+        self.emit("event", self.db.event("warn", "venue", f"orders now go to {label}; trading set to observe-only; "
+                                                         f"started {self.run['name']}{keys_note}"))
+        self.emit("settings", {"venue": venue})
+        return {"ok": True, "venue": venue, "label": label, "keys_configured": bool(self.executor), "run": self.run}
 
     async def set_kairos_key(self, api_key: str, base_url: str | None = None) -> dict[str, Any]:
         updates = {"KAIROS_API_KEY": api_key}

@@ -14,6 +14,8 @@ from typing import Any
 
 import aiohttp
 
+from . import venue
+
 MAINNET = "https://api.bybit.com"
 TESTNET = "https://api-testnet.bybit.com"
 MAX_SYMBOLS = 30
@@ -56,7 +58,7 @@ async def testnet_depth(session: aiohttp.ClientSession, symbol: str, thin_usd: f
     if hit and time.time() - hit[0] < 300:
         return hit[1]
     try:
-        res = await _get(session, TESTNET, "/v5/market/orderbook", {"category": "linear", "symbol": symbol, "limit": 200})
+        res = await _get(session, venue.get()["market_rest"], "/v5/market/orderbook", {"category": "linear", "symbol": symbol, "limit": 200})
         bids = [(float(p), float(q)) for p, q in res.get("b", [])]
         asks = [(float(p), float(q)) for p, q in res.get("a", [])]
         if not bids or not asks:
@@ -76,7 +78,7 @@ async def testnet_depth(session: aiohttp.ClientSession, symbol: str, thin_usd: f
 
 async def candidates(session: aiohttp.ClientSession, universe: list[dict[str, Any]], selected: list[str],
                      thin_usd: float = THIN_DEPTH_USD) -> list[dict[str, Any]]:
-    main, test = await asyncio.gather(listed(session, MAINNET), listed(session, TESTNET))
+    main, test = await asyncio.gather(listed(session, MAINNET), listed(session, venue.get()["market_rest"]))
     by_sym = {u["symbol"]: u for u in universe}
     syms = list(dict.fromkeys([*selected, *by_sym]))
     sem = asyncio.Semaphore(8)
@@ -111,7 +113,7 @@ async def validate(session: aiohttp.ClientSession, symbols: list[str]) -> list[s
         errs.append(f"not USDT perp symbols: {', '.join(bad)}")
     if errs:
         return errs
-    main, test = await asyncio.gather(listed(session, MAINNET), listed(session, TESTNET))
+    main, test = await asyncio.gather(listed(session, MAINNET), listed(session, venue.get()["market_rest"]))
     if missing := [s for s in symbols if s not in main]:
         errs.append(f"not a trading perp on Bybit mainnet (no signals): {', '.join(missing)}")
     if missing := [s for s in symbols if s not in test]:

@@ -84,7 +84,7 @@ export function CommandBar() {
   };
 
   const onTrading = async (on: boolean) => {
-    if (on && !confirm(`Enable AUTO-TRADE: the bot will place orders on your Bybit TESTNET account when ${ov?.kairos?.label || "model"} signals pass all gates.`)) return;
+    if (on && !confirm(`Enable AUTO-TRADE: the bot will place orders on your ${ov?.settings?.venue_label || "BYBIT TESTNET"} account when ${ov?.kairos?.label || "model"} signals pass all gates.`)) return;
     try {
       await post("/api/trading", { enabled: on });
     } catch (err: any) {
@@ -188,7 +188,7 @@ export function FKeys() {
       {st && <ModelSwitch />}
       {st && <button className="kbtn stratbtn" onClick={() => setState({ modal: { kind: "strategy" } })}
         data-tip="Brackets, entries, mirror averaging, trade trigger, filters, sizing, drift action">STRATEGY</button>}
-      <span className="venue">VENUE <b>BYBIT TESTNET</b> · SIGNALS <b>BYBIT MAINNET</b> · MODEL <b>{String(st?.model_id || "—").toUpperCase()}</b></span>
+      <span className="venue">VENUE <b>{st?.venue_label || "BYBIT TESTNET"}</b> · SIGNALS <b>BYBIT MAINNET</b> · MODEL <b>{String(st?.model_id || "—").toUpperCase()}</b></span>
     </nav>
   );
 }
@@ -234,7 +234,7 @@ export function Alerts() {
   if (!ov.kairos.configured) a.push(<div key="k" className="alert"><b>{String(ov.kairos.label || "MODEL").toUpperCase()} KEY NOT SET.</b> Market data is live; no decisions are made. <a href="#" onClick={(e) => { e.preventDefault(); setState({ modal: { kind: "keys" } }); }}>Add key ›</a></div>);
   if (ov.kairos.last_error) a.push(<div key="ke" className="alert crit"><b>{String(ov.kairos.label || "MODEL").toUpperCase()} ERROR</b> {ov.kairos.last_error}</div>);
   if (ov.account?.halted_reason) a.push(<div key="h" className="alert crit"><b>TRADING HALTED</b> {ov.account.halted_reason}</div>);
-  if (ov.executor_error) a.push(<div key="x" className="alert crit"><b>TESTNET</b> {ov.executor_error}</div>);
+  if (ov.executor_error) a.push(<div key="x" className="alert crit"><b>{ov.settings?.venue_label?.replace("BYBIT ", "") || "TESTNET"}</b> {ov.executor_error}</div>);
   if (!sock) a.push(<div key="s" className="alert"><b>LIVE STREAM RECONNECTING.</b> Prices and the account update again as soon as the socket is back.</div>);
   return <div>{a}</div>;
 }
@@ -261,7 +261,7 @@ export function StatusLine() {
         {sock.latencyMs !== null && <> · <b>{sock.latencyMs.toFixed(0)}</b> ms</>}
       </span>
       <span><Dot c={!k.configured ? "warn" : k.last_error ? "bad" : "ok"} />{String(k.label || "MODEL").toUpperCase()} <b>{k.configured ? (k.last_error ? "ERROR" : "READY") : "NO KEY"}</b> {k.requests_last_hour}/{k.budget_per_hour} req/h</span>
-      <span><Dot c={ov.executor_error ? "bad" : a?.private_stream ? "ok" : "warn"} />TESTNET <b>{ov.executor_error ? "OFFLINE" : a?.private_stream ? "STREAMING" : "POLLING"}</b>{a?.last_sync ? ` · sync ${age(now / 1000 - a.last_sync)}` : ""}</span>
+      <span><Dot c={ov.executor_error ? "bad" : a?.private_stream ? "ok" : "warn"} />{st?.venue_label?.replace("BYBIT ", "") || "TESTNET"} <b>{ov.executor_error ? "OFFLINE" : a?.private_stream ? "STREAMING" : "POLLING"}</b>{a?.last_sync ? ` · sync ${age(now / 1000 - a.last_sync)}` : ""}</span>
       {ov.run && <span data-tip={ov.run.name}>RUN <b className="amb">{ov.run.id}</b></span>}
       <span>MODE <b className={a?.trading_enabled ? "up" : ""}>{a?.trading_enabled ? "AUTO-TRADE" : "OBSERVE"}</b>{st.exploration_mode && <b className="amb"> · EXPLORE</b>}</span>
       <span>TRADE TF <b className="amb">{st.tf_profiles[st.decision_tf]?.label || st.decision_tf}</b> · HOLD ≤ <b>{st.horizon_minutes}m</b></span>

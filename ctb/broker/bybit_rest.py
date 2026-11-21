@@ -1,7 +1,8 @@
-"""Minimal signed Bybit v5 REST client for USDT linear perpetuals. TESTNET ONLY.
+"""Minimal signed Bybit v5 REST client for USDT linear perpetuals. TESTNET or DEMO TRADING ONLY.
 
-The host is hard-coded to api-testnet.bybit.com. There is deliberately no switch to mainnet:
-pointing this bot at real money would need a code change and a review, not an env flag.
+The host comes from ctb.venue and must be one of venue.TRADING_HOSTS (api-testnet / api-demo).
+There is deliberately no switch to mainnet: pointing this bot at real money would need a code
+change and a review, not an env flag.
 """
 
 from __future__ import annotations
@@ -15,6 +16,8 @@ import urllib.parse
 from typing import Any
 
 import aiohttp
+
+from .. import venue
 
 TESTNET_HOST = "https://api-testnet.bybit.com"
 RECV_WINDOW = "10000"
@@ -35,7 +38,9 @@ class BybitTestnet:
         self._key = api_key
         self._secret = api_secret.encode()
         self._session = session
-        self.host = TESTNET_HOST
+        self.host = venue.get()["rest"]
+        if self.host not in venue.TRADING_HOSTS:  # belt and braces: never sign requests for mainnet
+            raise ValueError(f"refusing to trade on {self.host}")
         self._time_offset_ms = 0
 
     # ------------------------------------------------------------------ transport
@@ -75,7 +80,7 @@ class BybitTestnet:
                         data = None
                 if not isinstance(data, dict):
                     # Bybit answers an unknown/invalid key with a bare HTTP 401 and no body.
-                    msg = "invalid API key, or a mainnet key used on testnet" if status in (401, 403) else f"HTTP {status} with no JSON body"
+                    msg = f"invalid API key for {venue.get()['label']}" if status in (401, 403) else f"HTTP {status} with no JSON body"
                     raise BybitError(10003 if status in (401, 403) else -status, msg, path)
             except (aiohttp.ClientError, asyncio.TimeoutError):
                 if attempt < retries and method == "GET":
@@ -173,6 +178,23 @@ class BybitTestnet:
         res = await self._request("GET", "/v5/order/history", params)
         lst = res.get("list", [])
         return lst[0] if lst else None
+
+    async def order_status(self, symbol: str, order_link_id: str | None = None, order_id: str | None = None) -> dict[str, Any] | None:
+        """Current state of one order. /v5/order/realtime also answers for recently finished orders and
+        is indexed within ~0.5 s; /v5/order/history can lag by seconds (4 s measured on Demo Trading),
+        so read realtime first and fall back to history."""
+        params = {"category": "linear", "symbol": symbol, "orderLinkId": order_link_id, "orderId": order_id}
+        try:
+            lst = (await self._request("GET", "/v5/order/realtime", params)).get("list", [])
+        except BybitError:
+            lst = []
+        if lst:
+            return lst[0]
+        return await self.order_history(symbol, order_link_id=order_link_id, order_id=order_id)
+
+    async def orders_since(self, symbol: str, start_ms: int, limit: int = 50) -> list[dict[str, Any]]:
+        res = await self._request("GET", "/v5/order/history", {"category": "linear", "symbol": symbol, "startTime": start_ms, "limit": limit})
+        return res.get("list", [])
 
     # ------------------------------------------------------------------ trading
     async def set_leverage(self, symbol: str, leverage: int) -> None:

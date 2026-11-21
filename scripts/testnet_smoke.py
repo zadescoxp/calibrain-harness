@@ -40,9 +40,13 @@ async def main(symbol: str, side: str) -> None:
         await asyncio.sleep(2)
         print("close:", await ex.close(symbol, "smoke_test"))
         await asyncio.sleep(3)
-        t = ex.db.query("SELECT * FROM trades WHERE status='open'")
-        for row in t:
-            await ex._record_close(row)
+        for _ in range(10):  # order history can lag a few seconds (Demo Trading: ~4 s)
+            rows = ex.db.query("SELECT * FROM trades WHERE status='open'")
+            if not rows:
+                break
+            for row in rows:
+                await ex.record_close(row)
+            await asyncio.sleep(2)
         for row in ex.db.query("SELECT symbol, side, qty, entry_price, exit_price, realized_pnl, fees, close_reason, protection FROM trades ORDER BY id DESC LIMIT 1"):
             print("recorded:", row)
         print("remaining positions:", [p["symbol"] for p in ex.positions])

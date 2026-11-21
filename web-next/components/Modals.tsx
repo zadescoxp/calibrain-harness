@@ -132,6 +132,14 @@ function KeysModal() {
   const [k, setK] = useState<any>(null);
   const [kMsg, setKMsg] = useState<Msg>(null);
   const [bMsg, setBMsg] = useState<Msg>(null);
+  const venueLabel: string = useStore((s) => s.ov?.settings?.venue_label) || "BYBIT TESTNET";
+  const venueKeys: string = useStore((s) => s.ov?.settings?.venue_keys_url) || "https://testnet.bybit.com/app/user/api-management";
+  const isDemo = venueLabel.includes("DEMO");
+  const switchVenue = (venue: string, label: string) => run("bv", async () => {
+    if (!confirm(`Send orders to ${label}? Auto-trade switches off and a new run starts. Only possible while the bot has no open trades.`)) return;
+    try { const r = await post("/api/venue", { venue }); setBMsg({ ok: true, text: r.unchanged ? `Already on ${label}` : `Orders now go to ${r.label}${r.keys_configured ? "" : " · add its keys below"}` }); } catch (e: any) { setBMsg({ ok: false, text: e.message }); }
+    load(); loadOverview();
+  });
   const [busy, setBusy] = useState<string | null>(null);
   const kairosKey = useRef<HTMLInputElement>(null), kairosUrl = useRef<HTMLInputElement>(null);
   const bybitKey = useRef<HTMLInputElement>(null), bybitSecret = useRef<HTMLInputElement>(null);
@@ -181,18 +189,26 @@ function KeysModal() {
         <div className={`keymsg ${jMsg ? (jMsg.ok ? "ok" : "bad") : ""}`}>{jMsg?.text}</div>
       </section>
       <section className="keybox">
-        <div className="keyhead"><b>BYBIT · TESTNET</b>{k && (k.bybit.api_key.set ? <Stat ok={k.bybit.connected} txt={`KEY ${k.bybit.api_key.hint} · ${k.bybit.connected ? "CONNECTED" : "ERROR"}`} /> : <Stat ok={false} txt="NOT SET" />)}</div>
-        <p>Create at <a href="https://testnet.bybit.com/app/user/api-management" target="_blank" rel="noopener noreferrer">testnet.bybit.com → API management</a>. Permissions: <b>Contract → Orders + Positions</b>. Leave <b>withdrawals off</b>. Mainnet keys are rejected.</p>
-        <label>API KEY<input ref={bybitKey} type="password" autoComplete="off" spellCheck={false} placeholder="testnet API key" /></label>
-        <label>API SECRET<input ref={bybitSecret} type="password" autoComplete="off" spellCheck={false} placeholder="testnet API secret" /></label>
+        <div className="keyhead"><b>{venueLabel.replace(" ", " · ")}</b>{k && (k.bybit.api_key.set ? <Stat ok={k.bybit.connected} txt={`KEY ${k.bybit.api_key.hint} · ${k.bybit.connected ? "CONNECTED" : "ERROR"}`} /> : <Stat ok={false} txt="NOT SET" />)}</div>
+        <div className="keyactions">
+          <span className="muted">VENUE</span>
+          {Object.entries(k?.bybit?.venues || {}).map(([name, v]: [string, any]) => (
+            <button key={name} className={`kbtn${k.bybit.venue === name ? " amber" : ""}`} type="button" disabled={!!busy || k.bybit.venue === name}
+              data-tip={v.configured ? "keys saved" : "no keys saved yet"}
+              onClick={() => switchVenue(name, v.label)}>{busy === "bv" ? "WORKING…" : `${v.label.replace("BYBIT ", "")}${v.configured ? "" : " (NO KEYS)"}`}</button>
+          ))}
+        </div>
+        <p>Create at <a href={venueKeys} target="_blank" rel="noopener noreferrer">{isDemo ? "bybit.com in Demo Trading mode → API management" : "testnet.bybit.com → API management"}</a>. Each venue keeps its own keys. Permissions: <b>Contract → Orders + Positions</b>. Leave <b>withdrawals off</b>. Mainnet keys are rejected.</p>
+        <label>API KEY<input ref={bybitKey} type="password" autoComplete="off" spellCheck={false} placeholder={isDemo ? "demo trading API key" : "testnet API key"} /></label>
+        <label>API SECRET<input ref={bybitSecret} type="password" autoComplete="off" spellCheck={false} placeholder={isDemo ? "demo trading API secret" : "testnet API secret"} /></label>
         <div className="keyactions">
           <button className="kbtn amber" type="button" disabled={!!busy} onClick={() => run("bs", async () => {
             const key = bybitKey.current!.value.trim(), secret = bybitSecret.current!.value.trim();
             if (!key || !secret) return setBMsg({ ok: false, text: "Both key and secret are required" });
-            try { const r = await post("/api/keys/bybit", { api_key: key, api_secret: secret }); bybitKey.current!.value = bybitSecret.current!.value = ""; setBMsg({ ok: true, text: `Saved · testnet equity ${fx(r.equity)} USDT` }); } catch (e: any) { setBMsg({ ok: false, text: e.message }); }
+            try { const r = await post("/api/keys/bybit", { api_key: key, api_secret: secret }); bybitKey.current!.value = bybitSecret.current!.value = ""; setBMsg({ ok: true, text: `Saved · ${venueLabel} equity ${fx(r.equity)} USDT` }); } catch (e: any) { setBMsg({ ok: false, text: e.message }); }
             load(); loadOverview();
           })}>{busy === "bs" ? "WORKING…" : "VERIFY & SAVE"}</button>
-          <span className="muted">Checked against your testnet wallet before saving. Auto-trade switches off.</span>
+          <span className="muted">Checked against the venue wallet before saving. Auto-trade switches off.</span>
         </div>
         <div className={`keymsg ${bMsg ? (bMsg.ok ? "ok" : "bad") : ""}`}>{bMsg?.text}</div>
       </section>

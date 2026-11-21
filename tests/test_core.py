@@ -572,6 +572,9 @@ def test_concurrent_entries_respect_same_side_cap(tmp_path):
         async def order_history(self, symbol, order_link_id=None, order_id=None):
             return {"orderStatus": "Filled", "cumExecQty": "1", "avgPrice": "99.99", "cumExecFee": "0.01", "orderId": f"o-{symbol}"}
 
+        async def order_status(self, symbol, order_link_id=None, order_id=None):
+            return await self.order_history(symbol, order_link_id=order_link_id, order_id=order_id)
+
         async def set_trading_stop(self, *a, **k):
             return None
 

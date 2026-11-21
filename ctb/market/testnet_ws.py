@@ -15,6 +15,7 @@ from typing import Awaitable, Callable
 
 import aiohttp
 
+from .. import venue
 from .store import MarketStore
 
 TESTNET_PUBLIC_WS = "wss://stream-testnet.bybit.com/v5/public/linear"
@@ -40,7 +41,7 @@ class TestnetTickerStream:
         backoff = 1.0
         while not self._stop:
             try:
-                async with self.session.ws_connect(TESTNET_PUBLIC_WS, heartbeat=None) as ws:
+                async with self.session.ws_connect(venue.get()["public_ws"], heartbeat=None) as ws:
                     args = [f"tickers.{s}" for s in self.symbols]
                     for i in range(0, len(args), 10):  # Bybit accepts at most 10 args per subscribe
                         await ws.send_json({"op": "subscribe", "args": args[i:i + 10]})

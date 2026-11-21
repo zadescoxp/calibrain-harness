@@ -16,6 +16,7 @@ from typing import Awaitable, Callable
 
 import aiohttp
 
+from .. import venue
 from .store import TIMEFRAMES, Bar, MarketStore
 
 log = logging.getLogger("ctb.market")
@@ -96,7 +97,7 @@ class BybitPublicFeed:
         tick = 0
         while not self._stop.is_set():
             try:
-                res = await self._get(TESTNET_REST, "/v5/market/tickers", {"category": "linear"})
+                res = await self._get(venue.get()["market_rest"], "/v5/market/tickers", {"category": "linear"})
                 by_sym = {r["symbol"]: r for r in res["list"]}
                 for s in self.store.symbols:
                     if s in by_sym:

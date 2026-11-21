@@ -17,6 +17,8 @@ from typing import Any, Awaitable, Callable
 
 import aiohttp
 
+from .. import venue
+
 TESTNET_PRIVATE_WS = "wss://stream-testnet.bybit.com/v5/private"
 TOPICS = ["position.linear", "execution.linear", "order.linear", "wallet"]
 
@@ -48,7 +50,7 @@ class BybitPrivateStream:
         backoff = 1.0
         while not self._stop:
             try:
-                async with self._session.ws_connect(TESTNET_PRIVATE_WS, heartbeat=None, timeout=aiohttp.ClientWSTimeout(ws_close=10)) as ws:
+                async with self._session.ws_connect(venue.get()["private_ws"], heartbeat=None, timeout=aiohttp.ClientWSTimeout(ws_close=10)) as ws:
                     await ws.send_json({"op": "auth", "args": self._auth_args()})
                     auth = await ws.receive_json(timeout=10)
                     if not auth.get("success"):

@@ -433,6 +433,9 @@ class MakerClient:
             return {"orderId": "m1"}
         return {"orderId": "tp1"}
 
+    async def order_status(self, symbol, order_link_id=None, order_id=None):
+        return await self.order_history(symbol, order_link_id=order_link_id, order_id=order_id)
+
     async def order_history(self, symbol, order_link_id=None, order_id=None):
         self.polls += 1
         if self.fill_after is not None and self.polls >= self.fill_after:

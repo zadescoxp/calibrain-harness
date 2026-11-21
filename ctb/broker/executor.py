@@ -25,6 +25,7 @@ from typing import Any, Callable
 
 from ..config import Settings
 from ..db import DB
+from ..venue import name as venue_name
 from .bybit_rest import BybitError, BybitTestnet
 
 log = logging.getLogger("ctb.exec")
@@ -96,6 +97,35 @@ def aggregate_close_rows(rows: list[dict[str, Any]], qty: float) -> dict[str, An
         "rows": [{"orderId": r["orderId"], "size": _f(r.get("closedSize") or r.get("qty")), "exit": _f(r["avgExitPrice"]),
                   "pnl": _f(r["closedPnl"]), "open_fee": _f(r.get("openFee")), "close_fee": _f(r.get("closeFee"))} for r in used],
     }
+
+
+def closed_rows_from_orders(t: dict[str, Any], orders: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Bybit Demo Trading posts no closed-P&L (or execution) rows. Rebuild them, in the same shape,
+    from the trade's filled closing orders: Bybit's closedPnl is gross P&L minus the pro-rata open fee
+    and the close fee, and so is this."""
+    entry, qty = _f(t.get("entry_price")), _f(t.get("qty"))
+    if not entry or not qty:
+        return []
+    long = t["side"] == "long"
+    sign = 1 if long else -1
+    entry_fee = _f(t.get("entry_fee"))
+    since = int(_f(t.get("opened_ts")) * 1000) - 2000
+    rows = []
+    for o in orders:
+        q = _f(o.get("cumExecQty"))
+        if q <= 0 or o.get("side") != ("Sell" if long else "Buy") or o.get("orderLinkId") == t.get("entry_link_id"):
+            continue
+        if not (o.get("reduceOnly") or o.get("closeOnTrigger") or o.get("stopOrderType")):
+            continue
+        if int(o.get("createdTime") or 0) < since:
+            continue
+        px, close_fee = _f(o.get("avgPrice")), _f(o.get("cumExecFee"))
+        open_fee = entry_fee * q / qty
+        rows.append({"orderId": o["orderId"], "closedSize": q, "avgEntryPrice": entry, "avgExitPrice": px,
+                     "openFee": open_fee, "closeFee": close_fee, "closedPnl": sign * (px - entry) * q - open_fee - close_fee,
+                     "createdTime": o.get("createdTime"), "updatedTime": o.get("updatedTime") or o.get("createdTime"),
+                     "source": "orders"})
+    return rows
 
 
 def reason_from_orders(orders: list[dict[str, Any] | None]) -> str | None:
@@ -409,7 +439,7 @@ class Executor:
         while time.time() < deadline:
             await asyncio.sleep(0.5)
             try:
-                last = await self.client.order_history(symbol, order_link_id=link)
+                last = await self.client.order_status(symbol, order_link_id=link)
             except BybitError:
                 continue
             if last and last.get("orderStatus") in TERMINAL_ORDER_STATES:
@@ -428,7 +458,7 @@ class Executor:
         while time.time() < deadline:
             await asyncio.sleep(0.15)
             try:
-                last = await self.client.order_history(symbol, order_link_id=link)
+                last = await self.client.order_status(symbol, order_link_id=link)
             except BybitError:
                 continue
             if last and last.get("orderStatus") in TERMINAL_ORDER_STATES:
@@ -604,7 +634,7 @@ class Executor:
     async def resolve_opening(self, t: dict[str, Any]) -> None:
         """A trade left in 'opening' (crash or restart between order and bookkeeping): read the entry
         order back from Bybit and either mark it open with its real fill or mark it unfilled."""
-        o = await self.client.order_history(t["symbol"], order_link_id=t["entry_link_id"])
+        o = await self.client.order_status(t["symbol"], order_link_id=t["entry_link_id"])
         if not o:
             self.db.update("trades", t["id"], {"status": "error", "notes": "entry order not found on Bybit"})
             return
@@ -625,6 +655,8 @@ class Executor:
         """Book a closed trade from Bybit's closed-P&L rows (all of them) and the closing orders."""
         start_ms = int(t["opened_ts"] * 1000) - 2000
         rows = await self.client.closed_pnl(limit=100, start_ms=start_ms, symbol=t["symbol"])
+        if not rows and venue_name() == "demo":
+            rows = closed_rows_from_orders(t, await self.client.orders_since(t["symbol"], start_ms))
         if t.get("entry_price"):
             rows = [r for r in rows if abs(_f(r.get("avgEntryPrice")) / t["entry_price"] - 1) < 1e-6]
         agg = aggregate_close_rows(rows, t["qty"])
