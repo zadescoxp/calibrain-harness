@@ -1,7 +1,7 @@
 """One live model request with a real market state; prints validation results (never the key).
 
     .venv/bin/python scripts/kairos_smoke.py SOLUSDT              # the active model (CTB_MODEL_PROVIDER)
-    .venv/bin/python scripts/kairos_smoke.py SOLUSDT --model jev  # a specific model: kairos | jev
+    .venv/bin/python scripts/kairos_smoke.py SOLUSDT --model jev  # a specific model: kairos | jev | ordecide | llm
 """
 import asyncio
 import json
@@ -13,7 +13,7 @@ import aiohttp  # noqa: E402
 
 from ctb.config import load_settings  # noqa: E402
 from ctb.features import build_state  # noqa: E402
-from ctb.kairos.client import KairosError, SystemOneClient  # noqa: E402
+from ctb.kairos.client import KairosError, make_client  # noqa: E402
 from ctb.models import get as get_model  # noqa: E402
 from ctb.kairos.parse import validate  # noqa: E402
 from ctb.kairos.questions import build_questions  # noqa: E402
@@ -34,8 +34,8 @@ async def main(symbol: str, provider: str | None) -> None:
         await BybitPublicFeed(store, session).warmup()
         state, meta = build_state(store, symbol, s)
         questions = build_questions(meta["sl_bp"], meta["tp_bp"], meta["horizon_min"])
-        client = SystemOneClient(spec, session, timeout_s=s.kairos_timeout_s,
-                                 base_url=s.kairos_base_url if spec.provider == "kairos" else None)
+        client = make_client(spec, session, timeout_s=s.kairos_timeout_s,
+                             base_url=s.kairos_base_url if spec.provider == "kairos" else None)
         try:
             res = await client.ask(state, questions)
         except KairosError as exc:

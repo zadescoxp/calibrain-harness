@@ -26,7 +26,7 @@ from .db import DB
 from .evaluation.labeler import Labeler
 from .features import build_state, mirror_state
 from .kairos import news as news_profile
-from .kairos.client import KairosError, RateBudget, SystemOneClient
+from .kairos.client import KairosError, RateBudget, SystemOneClient, make_client
 from .kairos.parse import validate
 from .kairos.questions import QUESTION_SET_VERSION, build_questions
 from .market.bybit_public import BybitPublicFeed
@@ -178,7 +178,7 @@ class Engine:
         from .models import get
         spec = get(provider or self.s.model_provider)
         base = self.s.kairos_base_url if spec.provider == "kairos" else None
-        return SystemOneClient(spec, self.session, timeout_s=self.s.kairos_timeout_s, base_url=base)
+        return make_client(spec, self.session, timeout_s=self.s.kairos_timeout_s, base_url=base)
 
     async def set_model(self, provider: str) -> dict[str, Any]:
         """Switch the classification model. Only while flat: a run never mixes two models, so the
@@ -321,11 +321,11 @@ class Engine:
                 continue
             try:
                 spec = get_model(name)
-            except KeyError:
+            except (KeyError, ValueError):
                 continue
             if not spec.api_key:
                 continue
-            self.members[name] = SystemOneClient(spec, self.session, timeout_s=self.s.kairos_timeout_s, max_retries=1)
+            self.members[name] = make_client(spec, self.session, timeout_s=self.s.kairos_timeout_s, max_retries=1)
             self.member_budgets.setdefault(name, RateBudget(self.s.ensemble_max_rph))
 
     async def _validation_loop(self) -> None:

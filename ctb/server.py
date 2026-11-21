@@ -421,6 +421,8 @@ def make_app(engine: Engine) -> web.Application:
             "kairos": {**key_hint(s.kairos_api_key), "base_url": s.kairos_base_url},
             "jev": {**key_hint(models_mod.MODELS["jev"].api_key), "base_url": models_mod.MODELS["jev"].base_url,
                     "model_id": models_mod.MODELS["jev"].model},
+            "openrouter": {**key_hint(models_mod.MODELS["llm"].api_key), "base_url": models_mod.MODELS["llm"].base_url,
+                           "decide_model": models_mod.MODELS["ordecide"].model, "llm_model": models_mod.MODELS["llm"].model},
             "active_model": s.model_provider,
             "bybit": {"api_key": key_hint(s.bybit_api_key), "api_secret": key_hint(s.bybit_api_secret),
                       "connected": bool(engine.executor and not engine.executor.sync_error),
@@ -467,6 +469,24 @@ def make_app(engine: Engine) -> web.Application:
     @routes.post("/api/keys/jev/test")
     async def keys_jev_test(_: web.Request) -> web.Response:
         return j(await engine.test_model("jev"))
+
+    @routes.post("/api/keys/openrouter")
+    async def keys_openrouter(req: web.Request) -> web.Response:
+        """One OpenRouter key serves both the decision models (ordecide) and chat LLMs (llm)."""
+        body = await req.json()
+        key = str(body.get("api_key", "")).strip()
+        if not key:
+            return j({"error": "API key is required"}, 400)
+        provider = s.model_provider if models_mod.get(s.model_provider).key_env == "OPENROUTER_API_KEY" else "llm"
+        return j(await engine.set_model_key(provider, key))
+
+    @routes.post("/api/keys/openrouter/test")
+    async def keys_openrouter_test(req: web.Request) -> web.Response:
+        body = await req.json() if req.can_read_body else {}
+        provider = str(body.get("provider") or "llm")
+        if provider not in ("llm", "ordecide"):
+            return j({"error": "provider must be llm or ordecide"}, 400)
+        return j(await engine.test_model(provider))
 
     @routes.post("/api/model")
     async def set_model(req: web.Request) -> web.Response:

@@ -68,7 +68,7 @@ function HelpModal() {
   const rows: [string, string][] = [
     ["BTC · ETH · SOL …", "Load a symbol into chart, model signal, book and stats"], ["ASK", "Ask the active model now for the loaded symbol (1 request)"],
     ["PRB", "Ask + repeat & mirror consistency probes (4 requests)"], ["1M 5M 15M 1H 4H", "Chart timeframe (view only)"],
-    ["POS 10", "Max open positions (1–50); new entries only"], ["TF 1M · TF 5M · TF 15M · TF 1H", "Trading timeframe: how often the model decides and trades"], ["MODEL", "Kairos or Jev: switch in the function-key bar (starts a new run)"],
+    ["POS 10", "Max open positions (1–50); new entries only"], ["TF 1M · TF 5M · TF 15M · TF 1H", "Trading timeframe: how often the model decides and trades"], ["MODEL", "Kairos, Jev, OR Decide or LLM: switch in the function-key bar (starts a new run)"],
     ["UNIV", "Choose the symbols the bot watches and trades"], ["STRAT", "Strategy: brackets, entries, mirror averaging, triggers, filters, sizing"],
     ["MON EVAL VALID TRD NEWS LOG", "Switch screen (F1 F2 F6 F3 F4 F5)"], ["KEYS · HELP", "API credentials · this list"], ["/", "Focus the command line from anywhere"],
   ];
@@ -142,6 +142,9 @@ function KeysModal() {
   const [jMsg, setJMsg] = useState<Msg>(null);
   const jevKey = useRef<HTMLInputElement>(null);
   const jevResult = (r: any) => setJMsg(r.ok ? { ok: true, text: `Jev reachable · ${r.latency_ms} ms · model ${r.model || "jev"}` } : { ok: false, text: r.error });
+  const [oMsg, setOMsg] = useState<Msg>(null);
+  const orKey = useRef<HTMLInputElement>(null);
+  const orResult = (r: any) => setOMsg(r.ok ? { ok: true, text: `OpenRouter reachable · ${r.latency_ms} ms · model ${r.model || "?"}` } : { ok: false, text: r.error });
   const Stat = ({ ok, txt }: { ok: boolean; txt: string }) => <span className={ok ? "up" : "dn"}>● {txt}</span>;
   return (
     <Dialog className="keys">
@@ -179,6 +182,22 @@ function KeysModal() {
           <span className="muted">A test uses 1 request from the hourly budget.</span>
         </div>
         <div className={`keymsg ${jMsg ? (jMsg.ok ? "ok" : "bad") : ""}`}>{jMsg?.text}</div>
+      </section>
+      <section className="keybox">
+        <div className="keyhead"><b>OPENROUTER</b>{k && (k.openrouter?.set ? <Stat ok txt={`SET ${k.openrouter.hint}`} /> : <Stat ok={false} txt="NOT SET" />)}</div>
+        <p>Create a key at <a href="https://openrouter.ai/settings/keys" target="_blank" rel="noopener noreferrer">openrouter.ai/settings/keys</a>. One key serves two MODEL choices: <b>OR Decide</b>, a decision model on OpenRouter&apos;s Decisions API (default <code>{k?.openrouter?.decide_model || "google/gemini-decision-1"}</code>, set <code>CTB_OR_DECIDE_MODEL</code>), and <b>LLM</b>, a chat model forced to answer with probabilities (default <code>{k?.openrouter?.llm_model || "deepseek/deepseek-v4.1-flash-1017"}</code>, set <code>CTB_LLM_MODEL</code>). Set a credit limit on the key.</p>
+        <label>API KEY<input ref={orKey} type="password" autoComplete="off" spellCheck={false} placeholder="paste OpenRouter API key" /></label>
+        <div className="keyactions">
+          <button className="kbtn amber" type="button" disabled={!!busy} onClick={() => run("os", async () => {
+            const key = orKey.current!.value.trim();
+            if (!key) return setOMsg({ ok: false, text: "Paste a key first" });
+            try { orResult(await post("/api/keys/openrouter", { api_key: key })); orKey.current!.value = ""; } catch (e: any) { setOMsg({ ok: false, text: e.message }); }
+            load(); loadOverview();
+          })}>{busy === "os" ? "WORKING…" : "SAVE & TEST"}</button>
+          <button className="kbtn" type="button" disabled={!!busy} onClick={() => run("ot", async () => { try { orResult(await post("/api/keys/openrouter/test", { provider: "llm" })); } catch (e: any) { setOMsg({ ok: false, text: e.message }); } })}>{busy === "ot" ? "WORKING…" : "TEST LLM"}</button>
+          <button className="kbtn" type="button" disabled={!!busy} onClick={() => run("od", async () => { try { orResult(await post("/api/keys/openrouter/test", { provider: "ordecide" })); } catch (e: any) { setOMsg({ ok: false, text: e.message }); } })}>{busy === "od" ? "WORKING…" : "TEST DECIDE"}</button>
+        </div>
+        <div className={`keymsg ${oMsg ? (oMsg.ok ? "ok" : "bad") : ""}`}>{oMsg?.text}</div>
       </section>
       <section className="keybox">
         <div className="keyhead"><b>BYBIT · TESTNET</b>{k && (k.bybit.api_key.set ? <Stat ok={k.bybit.connected} txt={`KEY ${k.bybit.api_key.hint} · ${k.bybit.connected ? "CONNECTED" : "ERROR"}`} /> : <Stat ok={false} txt="NOT SET" />)}</div>

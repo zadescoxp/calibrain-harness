@@ -112,7 +112,7 @@ class SystemOneClient:
                  base_url: str | None = None, api_key_getter=None, model: str | None = None):
         self.spec = spec
         self.provider = spec.provider
-        self.url = (base_url or spec.base_url).rstrip("/") + "/v1/systemone"
+        self.url = (base_url or spec.base_url).rstrip("/") + spec.path
         self._key = api_key_getter or (lambda: spec.api_key)
         self.session = session
         self.model = model or spec.model
@@ -123,21 +123,9 @@ class SystemOneClient:
     def configured(self) -> bool:
         return bool(self._key())
 
-    async def ask(self, state: Any, questions: dict[str, Any], *, task_profile: str | None = None) -> KairosResult:
-        key = self._key()
+    async def _post(self, payload: str, key: str) -> tuple[Any, int, float]:
+        """POST with bounded retries on the model's retryable statuses. Returns (body, attempts, t0)."""
         spec = self.spec
-        if not key:
-            raise KairosError("not_configured", f"{spec.key_env} is not set")
-        if not questions or (spec.max_questions and len(questions) > spec.max_questions):
-            raise KairosError("invalid_request", f"{spec.label} accepts 1-{spec.max_questions or 'n'} questions per request, got {len(questions)}")
-        body: dict[str, Any] = {"model": self.model, "state": state, "questions": questions}
-        if task_profile:
-            if not spec.supports_news_return:
-                raise KairosError("invalid_request", f"{spec.label} does not support task_profile={task_profile!r}")
-            body["task_profile"] = task_profile
-        payload = json.dumps(body, separators=(",", ":"), allow_nan=False)
-        if len(payload.encode()) > spec.max_payload_bytes:
-            raise KairosError("payload_too_large", f"request exceeds the {spec.max_payload_bytes // 1024 // 1024} MiB limit of {spec.label}")
         headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
 
         attempt = 0
@@ -165,11 +153,29 @@ class SystemOneClient:
                     continue
                 raise KairosError("transport", repr(exc)) from exc
             break
+        return data, attempt, t0
+
+    async def ask(self, state: Any, questions: dict[str, Any], *, task_profile: str | None = None) -> KairosResult:
+        key = self._key()
+        spec = self.spec
+        if not key:
+            raise KairosError("not_configured", f"{spec.key_env} is not set")
+        if not questions or (spec.max_questions and len(questions) > spec.max_questions):
+            raise KairosError("invalid_request", f"{spec.label} accepts 1-{spec.max_questions or 'n'} questions per request, got {len(questions)}")
+        body: dict[str, Any] = {"model": self.model, "state": state, "questions": questions}
+        if task_profile:
+            if not spec.supports_news_return:
+                raise KairosError("invalid_request", f"{spec.label} does not support task_profile={task_profile!r}")
+            body["task_profile"] = task_profile
+        payload = json.dumps(body, separators=(",", ":"), allow_nan=False)
+        if len(payload.encode()) > spec.max_payload_bytes:
+            raise KairosError("payload_too_large", f"request exceeds the {spec.max_payload_bytes // 1024 // 1024} MiB limit of {spec.label}")
+        data, attempt, t0 = await self._post(payload, key)
 
         latency = (time.perf_counter() - t0) * 1000
         if not isinstance(data, dict) or not isinstance(data.get("answers"), dict):
             raise KairosError("malformed_response", f"response has no answers object: {str(data)[:300]}")
-        meta = {k: data.get(k) for k in ("model", "model_version", "prompt_version", "calibration_version", "task_profile", "request_id", "timings_ms") if k in data}
+        meta = {k: data.get(k) for k in ("model", "model_version", "prompt_version", "calibration_version", "task_profile", "request_id", "timings_ms", "id", "provider") if k in data}
         if isinstance(data.get("metadata"), dict):
             meta.update(data["metadata"])
         return KairosResult(
@@ -186,3 +192,11 @@ def KairosClient(base_url: str, api_key_getter, session: aiohttp.ClientSession, 
                  timeout_s: float = 120, max_retries: int = 2) -> SystemOneClient:
     return SystemOneClient(MODELS["kairos"], session, timeout_s=timeout_s, max_retries=max_retries,
                            base_url=base_url, api_key_getter=api_key_getter, model=model)
+
+
+def make_client(spec: ModelSpec, session: aiohttp.ClientSession, **kw: Any) -> SystemOneClient:
+    """The right client for a model spec: System One APIs as-is, chat LLMs through the adapter."""
+    if spec.kind == "chat":
+        from .chat import ChatDecisionClient
+        return ChatDecisionClient(spec, session, **kw)
+    return SystemOneClient(spec, session, **kw)

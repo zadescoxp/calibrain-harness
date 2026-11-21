@@ -275,7 +275,7 @@ class Settings:
             "model_label": self.model_spec.label,
             "model_id": self.model_spec.model,
             "models": {p: {"label": m.label, "vendor": m.vendor, "model_id": m.model, "configured": bool(m.api_key),
-                           "news_return": m.supports_news_return} for p, m in _models().items()},
+                           "news_return": m.supports_news_return} for p, m in _models([self.model_provider, *self.ensemble]).items()},
             "kairos_base_url": self.kairos_base_url,
             "kairos_model": self.kairos_model,
             "kairos_key_configured": bool(self.kairos_api_key),
@@ -326,9 +326,9 @@ class Settings:
         return env
 
 
-def _models():
-    from .models import MODELS
-    return MODELS
+def _models(extra: list[str] | tuple[str, ...] = ()):
+    from .models import listed
+    return listed(extra)
 
 
 def load_settings() -> Settings:
