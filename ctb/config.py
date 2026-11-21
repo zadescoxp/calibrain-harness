@@ -13,7 +13,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def load_dotenv(path: Path = ROOT / ".env") -> None:
+def load_dotenv(path: Path | None = None) -> None:
+    """CTB_ENV_FILE points at another env file (the tests use it to ignore the local .env)."""
+    path = path or Path(os.environ.get("CTB_ENV_FILE") or ROOT / ".env")
     if not path.exists():
         return
     for line in path.read_text(encoding="utf-8").splitlines():
