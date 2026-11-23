@@ -1,0 +1,39 @@
+# Landing page (site/) on GitHub Pages. The demo video and poster come from docs/media at build time,
+# so they are not stored twice in the repo. Needs Settings -> Pages -> Source: "GitHub Actions".
+name: Site
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths: ["site/**", "docs/media/**", "docs/brand/**", ".github/workflows/site.yml"]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assemble the site
+        run: |
+          mkdir -p _site/media
+          cp site/index.html site/favicon.svg _site/
+          cp docs/media/calibrain-harness-demo.mp4 docs/media/calibrain-harness-terminal.jpg _site/media/
+          touch _site/.nojekyll
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4
