@@ -1,4 +1,4 @@
-"""Minimal signed Bybit v5 REST client for USDT linear perpetuals. PAPER MONEY ONLY.
+"""Minimal signed Bybit v5 REST client for USDT linear perpetuals. DEMO / TESTNET ONLY.
 
 Signed requests go only to a host in venue.PRIVATE_HOSTS (Bybit testnet or Bybit Demo Trading).
 There is deliberately no real-money venue: adding one would need a code change and a review, not
