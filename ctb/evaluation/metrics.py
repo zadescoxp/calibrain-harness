@@ -155,6 +155,11 @@ def execution_quality(trades: list[dict[str, Any]]) -> dict[str, Any]:
         "fill_ratio_mean": round(statistics.fmean(t["qty"] / t["requested_qty"] for t in filled), 4) if filled else None,
         "multi_fill_exits": sum(1 for t in trades if (t.get("exit_fills") or 1) > 1),
         "worst_r": round(min((t["r_mult"] for t in trades if t.get("r_mult") is not None), default=0), 3),
+        # Demo Trading only: venue-reported numbers before the cost-realism re-booking, and whether
+        # resting fills were ones a real queue would have given (through / touch / none / unverified)
+        "venue_entry_slip_bp": _dist([t.get("venue_entry_slip_bp") for t in trades]),
+        "maker_fill_check": dict(Counter(t["maker_fill_check"] for t in trades if t.get("maker_fill_check"))),
+        "tp_fill_check": dict(Counter(t["tp_fill_check"] for t in trades if t.get("tp_fill_check"))),
     }
 
 
@@ -385,6 +390,12 @@ def compute(db: DB, *, symbol: str | None = None, since_ts: float | None = None,
             "by_side": {s: {"n": len(v), "pnl": round(sum(v), 2)} for s in ("long", "short") if (v := [t["realized_pnl"] or 0 for t in trades if t["side"] == s])},
             "by_symbol": {s: round(sum(t["realized_pnl"] or 0 for t in trades if t["symbol"] == s), 2) for s in sorted({t["symbol"] for t in trades})},
             "execution": execution_quality(trades),
+            # cost realism (Demo Trading): Bybit's own P&L, and what was charged on top of it
+            "realism_trades": sum(1 for t in trades if t.get("realism_adj_usd") is not None),
+            "venue_pnl_usdt": round(sum((t["venue_pnl"] if t.get("venue_pnl") is not None else t["realized_pnl"]) or 0 for t in trades), 2),
+            "realism_adj_usdt": round(sum(t.get("realism_adj_usd") or 0 for t in trades), 2),
+            "funding_usdt": round(sum(t.get("funding_usd") or 0 for t in trades), 2),
+            "venues": dict(Counter(t.get("venue") or "testnet" for t in trades)),
         })
     aw = [w for w in tw if w != "status='closed'"]
     attempts = db.query("SELECT status, COUNT(*) n FROM trades" + (" WHERE " + " AND ".join(aw) if aw else "") + " GROUP BY status", tp)
