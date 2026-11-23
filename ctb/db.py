@@ -145,11 +145,25 @@ TRADE_COLUMNS = {
     "mfe_r": "REAL",             # best excursion in R seen while open (mainnet)
     "regime": "TEXT",
     "events_json": "TEXT",       # market events on the decision bar
+    # cost realism (Demo Trading, ctb/broker/realism.py): booked columns above are the worse of
+    # Bybit's numbers and the modelled real-market cost; the raw venue numbers are kept here
+    "venue": "TEXT",             # testnet | demo
+    "venue_pnl": "REAL",         # Bybit closed P&L before the realism adjustment
+    "venue_fees": "REAL",
+    "venue_entry_slip_bp": "REAL",
+    "venue_exit_slip_bp": "REAL",
+    "realism_adj_usd": "REAL",   # venue_pnl - realized_pnl (slippage + fees + funding Bybit did not charge)
+    "funding_usd": "REAL",       # funding paid (+) / received (-) over the hold
+    "realism_json": "TEXT",      # breakdown per leg
+    "exit_ref_px": "REAL",       # best mainnet price when the bot sent its exit
+    "exit_model_px": "REAL",     # VWAP of walking the mainnet book for the exit size
+    "maker_fill_check": "TEXT",  # post-only entry: through | touch | none (did mainnet trade past our price)
+    "tp_fill_check": "TEXT",     # resting take-profit, same check
 }
 
 JSON_COLS = {"state_json", "questions_json", "answers_json", "parsed_json", "issues_json", "usage_json",
              "model_meta_json", "decision_json", "label_json", "probs_json", "fills_json", "config_json",
-             "sizing_json", "events_json"}
+             "sizing_json", "events_json", "realism_json"}
 
 
 class DB:
