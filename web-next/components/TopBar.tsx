@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { post } from "@/lib/api";
 import { loadOverview, selectSymbol, selectTf } from "@/lib/data";
-import { getState, setState, useStore } from "@/lib/store";
+import { getState, setState, useStore, venueOf } from "@/lib/store";
 import { age, short } from "@/lib/format";
 
 const CITIES: [string, string][] = [["New York", "America/New_York"], ["London", "Europe/London"], ["Dubai", "Asia/Dubai"], ["Mumbai", "Asia/Kolkata"],
@@ -78,13 +78,14 @@ export function CommandBar() {
     if (raw === "ASK" || raw === "PRB") return ask(raw === "PRB");
     if (raw === "KEYS") return setState({ modal: { kind: "keys" } });
     if (raw === "STRAT" || raw === "STRATEGY") return setState({ modal: { kind: "strategy" } });
+    if (["CONFIG", "CFG", "SET", "SETTINGS", "PREFS", "VENUE"].includes(raw)) return setState({ modal: { kind: "config" } });
     if (raw === "UNIV" || raw === "SYMBOLS" || raw === "SYM") return setState({ modal: { kind: "universe" } });
     if (raw === "HELP" || raw === "?") return setState({ modal: { kind: "help" } });
     flash(`UNKNOWN COMMAND "${raw}" · type HELP`);
   };
 
   const onTrading = async (on: boolean) => {
-    if (on && !confirm(`Enable AUTO-TRADE: the bot will place orders on your Bybit TESTNET account when ${ov?.kairos?.label || "model"} signals pass all gates.`)) return;
+    if (on && !confirm(`Enable AUTO-TRADE: the bot will place orders on your ${venueOf(ov?.settings).label} account (paper money) when ${ov?.kairos?.label || "model"} signals pass all gates.`)) return;
     try {
       await post("/api/trading", { enabled: on });
     } catch (err: any) {
@@ -99,7 +100,7 @@ export function CommandBar() {
     loadOverview();
   };
   const onKill = async () => {
-    if (confirm("KILL: close all bot positions on testnet, cancel orders and stop auto-trade?")) {
+    if (confirm(`KILL: close all bot positions on ${venueOf(ov?.settings).name}, cancel orders and stop auto-trade?`)) {
       await post("/api/kill");
       loadOverview();
     }
@@ -122,7 +123,7 @@ export function CommandBar() {
           <input type="checkbox" checked={!!ov?.settings.exploration_mode} onChange={(e) => onExplore(e.target.checked)} />
           <span className="arm-box" /><span>EXPLORE</span>
         </label>
-        <label className="arm" data-tip="Allow the bot to place orders on your Bybit testnet account">
+        <label className="arm" data-tip={`Allow the bot to place orders on your ${venueOf(ov?.settings).label} account`}>
           <input type="checkbox" checked={!!ov?.settings.trading_enabled} onChange={(e) => onTrading(e.target.checked)} />
           <span className="arm-box" /><span>AUTO-TRADE</span>
         </label>
@@ -188,7 +189,9 @@ export function FKeys() {
       {st && <ModelSwitch />}
       {st && <button className="kbtn stratbtn" onClick={() => setState({ modal: { kind: "strategy" } })}
         data-tip="Brackets, entries, mirror averaging, trade trigger, filters, sizing, drift action">STRATEGY</button>}
-      <span className="venue">VENUE <b>BYBIT TESTNET</b> · SIGNALS <b>BYBIT MAINNET</b> · MODEL <b>{String(st?.model_id || "—").toUpperCase()}</b></span>
+      {st && <button className="kbtn stratbtn" onClick={() => setState({ modal: { kind: "config" } })}
+        data-tip="Venue (demo / testnet), fees and slippage, risk, signal gates, execution, model budget">CONFIG</button>}
+      <span className="venue">VENUE <b className="click" onClick={() => setState({ modal: { kind: "config" } })} data-tip="Change venue in CONFIG">{venueOf(st).label}</b>{venueOf(st).realism && <span data-tip="Demo fills and fees are re-booked at the worse of Bybit's numbers and the real mainnet book walk, fee schedule and funding"> · <b className="amb">COST REALISM</b></span>} · SIGNALS <b>BYBIT MAINNET</b> · MODEL <b>{String(st?.model_id || "—").toUpperCase()}</b></span>
     </nav>
   );
 }
@@ -234,7 +237,7 @@ export function Alerts() {
   if (!ov.kairos.configured) a.push(<div key="k" className="alert"><b>{String(ov.kairos.label || "MODEL").toUpperCase()} KEY NOT SET.</b> Market data is live; no decisions are made. <a href="#" onClick={(e) => { e.preventDefault(); setState({ modal: { kind: "keys" } }); }}>Add key ›</a></div>);
   if (ov.kairos.last_error) a.push(<div key="ke" className="alert crit"><b>{String(ov.kairos.label || "MODEL").toUpperCase()} ERROR</b> {ov.kairos.last_error}</div>);
   if (ov.account?.halted_reason) a.push(<div key="h" className="alert crit"><b>TRADING HALTED</b> {ov.account.halted_reason}</div>);
-  if (ov.executor_error) a.push(<div key="x" className="alert crit"><b>TESTNET</b> {ov.executor_error}</div>);
+  if (ov.executor_error) a.push(<div key="x" className="alert crit"><b>{venueOf(ov.settings).short}</b> {ov.executor_error}</div>);
   if (!sock) a.push(<div key="s" className="alert"><b>LIVE STREAM RECONNECTING.</b> Prices and the account update again as soon as the socket is back.</div>);
   return <div>{a}</div>;
 }
@@ -261,7 +264,7 @@ export function StatusLine() {
         {sock.latencyMs !== null && <> · <b>{sock.latencyMs.toFixed(0)}</b> ms</>}
       </span>
       <span><Dot c={!k.configured ? "warn" : k.last_error ? "bad" : "ok"} />{String(k.label || "MODEL").toUpperCase()} <b>{k.configured ? (k.last_error ? "ERROR" : "READY") : "NO KEY"}</b> {k.requests_last_hour}/{k.budget_per_hour} req/h</span>
-      <span><Dot c={ov.executor_error ? "bad" : a?.private_stream ? "ok" : "warn"} />TESTNET <b>{ov.executor_error ? "OFFLINE" : a?.private_stream ? "STREAMING" : "POLLING"}</b>{a?.last_sync ? ` · sync ${age(now / 1000 - a.last_sync)}` : ""}</span>
+      <span><Dot c={ov.executor_error ? "bad" : a?.private_stream ? "ok" : "warn"} />{venueOf(st).short} <b>{ov.executor_error ? "OFFLINE" : a?.private_stream ? "STREAMING" : "POLLING"}</b>{a?.last_sync ? ` · sync ${age(now / 1000 - a.last_sync)}` : ""}</span>
       {ov.run && <span data-tip={ov.run.name}>RUN <b className="amb">{ov.run.id}</b></span>}
       <span>MODE <b className={a?.trading_enabled ? "up" : ""}>{a?.trading_enabled ? "AUTO-TRADE" : "OBSERVE"}</b>{st.exploration_mode && <b className="amb"> · EXPLORE</b>}</span>
       <span>TRADE TF <b className="amb">{st.tf_profiles[st.decision_tf]?.label || st.decision_tf}</b> · HOLD ≤ <b>{st.horizon_minutes}m</b></span>
