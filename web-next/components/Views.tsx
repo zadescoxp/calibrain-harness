@@ -5,6 +5,8 @@ import { loadNews } from "@/lib/data";
 import { useStore, useVenue } from "@/lib/store";
 import { dt, fx, isNum, sg, short, ud } from "@/lib/format";
 import { KV, openDecision } from "./Monitor";
+import { ExpandBtn, PhIcon, Sym } from "./ui";
+import { Download, RefreshCw } from "lucide-react";
 
 /* ---------------------------------------------------------------- charts for EVAL (hand-drawn SVG) */
 function Reliability({ cal, horizon }: { cal: any; horizon?: number }) {
@@ -54,7 +56,7 @@ function HBars({ items, vk, lk, unit = "", signed = true }: { items: any[]; vk: 
 }
 
 const Panel = ({ code, title, span2, tight, children }: { code: string; title: string; span2?: boolean; tight?: boolean; children: React.ReactNode }) => (
-  <section className={`pnl${span2 ? " span2" : ""}`}><div className="ph"><span className="code">{code}</span>{title}</div><div className={`pb${tight ? " tight" : ""}`}>{children}</div></section>
+  <section className={`pnl${span2 ? " span2" : ""}`}><div className="ph"><PhIcon code={code} /><span className="ph-title">{title}</span><span className="ph-r"><ExpandBtn /></span></div><div className={`pb${tight ? " tight" : ""}`}>{children}</div></section>
 );
 
 const dist = (d: any, unit = "bp") => (d ? `${sg(d.mean, 1)}${unit} mean · p90 ${sg(d.p90, 1)} · max ${sg(d.max, 1)} (n=${d.n})` : "—");
@@ -86,15 +88,15 @@ export function EvalView() {
   };
   const toolbar = (
     <div className="toolbar">
-      <span className="code">EVAL</span><b>Model evaluation</b>
-      <select value={f.symbol} onChange={(e) => setF({ ...f, symbol: e.target.value })}><option value="">ALL SYMBOLS</option>{st?.symbols.map((s: string) => <option key={s} value={s}>{s}</option>)}</select>
-      <select value={f.tf} onChange={(e) => setF({ ...f, tf: e.target.value })}><option value="">ALL TRADE TFs</option>{st && Object.entries<any>(st.tf_profiles).map(([tf, p]) => <option key={tf} value={tf}>TRADE TF {p.label}</option>)}</select>
-      <select value={f.model} onChange={(e) => setF({ ...f, model: e.target.value })}><option value="">ALL MODELS</option>{Object.entries<any>(models).map(([p, m]) => <option key={p} value={p}>{m.label.toUpperCase()}</option>)}</select>
-      <select value={f.run} onChange={(e) => setF({ ...f, run: e.target.value })}><option value="">ALL RUNS</option>{runsData?.runs.map((r: any) => <option key={r.id} value={String(r.id)}>RUN {r.id}{r.current ? " (LIVE)" : ""}</option>)}</select>
-      <select value={f.qset} onChange={(e) => setF({ ...f, qset: e.target.value })} data-tip="Question set: v2 adds base-rate anchoring, direction and big_move"><option value="perp-v2">QUESTIONS v2</option><option value="perp-v1">QUESTIONS v1</option><option value="">ALL QUESTION SETS</option></select>
-      <select value={f.hours} onChange={(e) => setF({ ...f, hours: e.target.value })}><option value="">ALL TIME</option><option value="24">LAST 24H</option><option value="6">LAST 6H</option><option value="4">LAST 4H</option></select>
-      <button className="kbtn" onClick={() => load()}>REFRESH</button>
-      <button className="kbtn amber" onClick={report}>EXPORT MINARA REPORT</button>
+      <b><PhIcon code="EVAL" size={18} />Model evaluation</b>
+      <select value={f.symbol} onChange={(e) => setF({ ...f, symbol: e.target.value })}><option value="">All markets</option>{st?.symbols.map((s: string) => <option key={s} value={s}>{s}</option>)}</select>
+      <select value={f.tf} onChange={(e) => setF({ ...f, tf: e.target.value })}><option value="">All trading timeframes</option>{st && Object.entries<any>(st.tf_profiles).map(([tf, p]) => <option key={tf} value={tf}>Trading every {p.label.toLowerCase()}</option>)}</select>
+      <select value={f.model} onChange={(e) => setF({ ...f, model: e.target.value })}><option value="">All models</option>{Object.entries<any>(models).map(([p, m]) => <option key={p} value={p}>{m.label}</option>)}</select>
+      <select value={f.run} onChange={(e) => setF({ ...f, run: e.target.value })}><option value="">All runs</option>{runsData?.runs.map((r: any) => <option key={r.id} value={String(r.id)}>Run {r.id}{r.current ? " (live)" : ""}</option>)}</select>
+      <select value={f.qset} onChange={(e) => setF({ ...f, qset: e.target.value })} data-tip="Question set: v2 adds base-rate anchoring, direction and big_move"><option value="perp-v2">Questions v2</option><option value="perp-v1">Questions v1</option><option value="">All question sets</option></select>
+      <select value={f.hours} onChange={(e) => setF({ ...f, hours: e.target.value })}><option value="">All time</option><option value="24">Last 24 h</option><option value="6">Last 6 h</option><option value="4">Last 4 h</option></select>
+      <button className="btn" onClick={() => load()}><RefreshCw size={14} strokeWidth={1.7} aria-hidden="true" />Refresh</button>
+      <button className="btn primary" onClick={report}><Download size={14} strokeWidth={1.8} aria-hidden="true" />Export report</button>
     </div>
   );
   if (!m) return <main className="view on">{toolbar}<div className="empty">Computing metrics…</div></main>;
@@ -214,7 +216,7 @@ function RunPicker({ runs, overall, sel, onSel }: { runs: any[]; overall: any; s
   const cur = sel === null ? overall : runs.find((r) => r.id === sel) || overall;
   const label = (r: any, isAll: boolean) => (
     <>
-      <b className="amb">{isAll ? "ALL RUNS" : `RUN ${r.id}`}</b>{!isAll && r.current && <span className="tag long">LIVE</span>}
+      <b className="amb">{isAll ? "All runs" : `Run ${r.id}`}</b>{!isAll && r.current && <span className="tag long">live</span>}
       <span className="rp-setup">{isAll ? "all runs combined" : runSetup(r)}</span>
     </>
   );
@@ -274,15 +276,15 @@ export function TradesView() {
   return (
     <main className="view on">
       <section className="pnl" style={{ marginBottom: 4, overflow: "visible" }}>
-        <div className="ph"><span className="code">RUNS</span>Test run<span className="ph-r">PnL from Bybit closed-PnL · signals and skill from mainnet labels</span></div>
+        <div className="ph"><PhIcon code="RUNS" />Test run<span className="ph-r">PnL from Bybit closed-PnL · signals and skill from mainnet labels</span></div>
         {runs ? <RunPicker runs={runs.runs} overall={runs.overall} sel={run} onSel={setRun} /> : <div className="empty">Loading runs…</div>}
       </section>
       <section className="pnl">
-        <div className="ph"><span className="code">TRD</span>Bot trades · {run ? `Run ${run}` : "all runs"} · {venue.label.toLowerCase().replace("bybit", "Bybit")}<span className="ph-r">P&amp;L, fees and exit price summed from every Bybit closed-PnL row</span></div>
+        <div className="ph"><PhIcon code="TRD" />Bot trades · {run ? `Run ${run}` : "all runs"} · {venue.label.toLowerCase().replace("bybit", "Bybit")}<span className="ph-r">P&amp;L, fees and exit price summed from every Bybit closed-PnL row</span></div>
         <div className="pb tight scroll">
-          {!ts ? <div className="empty">Loading…</div> : !ts.length ? <div className="empty">No trades yet. They appear once a model key is set and AUTO-TRADE is on.</div> : (
+          {!ts ? <div className="empty">Loading…</div> : !ts.length ? <div className="empty">No trades yet. They appear once a model key is set and auto-trade is on.</div> : (
             <table className="t">
-              <thead><tr><th>Run</th><th>Opened</th><th>Sym</th><th>Side</th><th>Mode</th><th className="r">Qty (req)</th><th className="r">Ref</th><th className="r">Entry</th><th className="r">Slip bp</th><th className="r">TP</th><th className="r">SL</th>
+              <thead><tr><th>Run</th><th>Opened</th><th>Market</th><th>Side</th><th>Mode</th><th className="r">Qty (req)</th><th className="r">Ref</th><th className="r">Entry</th><th className="r">Slip bp</th><th className="r">TP</th><th className="r">SL</th>
                 <th>Status</th><th>Exit</th><th className="r">Exit px</th><th className="r">Exit slip</th><th className="r">Fills</th><th className="r">PnL</th><th className="r">Fees</th><th className="r">R</th><th className="r">EV R</th><th>Dec</th></tr></thead>
               <tbody>
                 {ts.map((t) => {
@@ -291,9 +293,9 @@ export function TradesView() {
                   const partial = t.requested_qty && t.qty < t.requested_qty * (1 - 1e-9);
                   return (
                     <tr key={t.id}>
-                      <td className="amb">{t.run_id ?? "—"}</td><td className="muted">{dt(t.opened_ts)}</td><td className="sym">{short(t.symbol)}</td><td><span className={`tag ${t.side}`}>{t.side.toUpperCase()}</span></td>
-                      <td>{mode === "exploration" ? <span className="tag xp">EXPLORE</span> : mode === "strict" ? <span className="tag amb">STRICT</span> : ""}</td>
-                      <td className="r">{t.qty}{partial && <span className="tag part" data-tip={`IOC filled ${t.qty} of ${t.requested_qty}`}> PART</span>}</td>
+                      <td className="amb">{t.run_id ?? "—"}</td><td className="muted">{dt(t.opened_ts)}</td><td className="sym"><Sym symbol={t.symbol} size={14} /></td><td><span className={`tag ${t.side}`}>{t.side}</span></td>
+                      <td>{mode === "exploration" ? <span className="tag xp">explore</span> : mode === "strict" ? <span className="tag amb">strict</span> : ""}</td>
+                      <td className="r">{t.qty}{partial && <span className="tag part" data-tip={`IOC filled ${t.qty} of ${t.requested_qty}`}> partial</span>}</td>
                       <td className="r muted">{t.ref_price ?? "—"}</td><td className="r">{t.entry_price ?? "—"}</td><td className={`r ${ud(-(t.entry_slip_bp ?? 0))}`}>{isNum(t.entry_slip_bp) ? sg(t.entry_slip_bp, 1) : "—"}</td>
                       <td className="r">{t.tp_price}</td><td className="r">{t.sl_price}</td>
                       <td>{t.status}</td><td>{t.close_reason || ""}</td><td className="r">{isNum(t.exit_price) ? Number(t.exit_price).toPrecision(8) : "—"}</td>
@@ -318,7 +320,7 @@ export function NewsView() {
   return (
     <main className="view on">
       <section className="pnl" style={{ marginBottom: 4 }}>
-        <div className="ph"><span className="code">NRET</span>Kairos news_return forecasts<span className="ph-r">15m horizon · 7 bins scaled by round-trip cost c</span></div>
+        <div className="ph"><PhIcon code="NRET" />Kairos news_return forecasts<span className="ph-r">15m horizon · 7 bins scaled by round-trip cost c</span></div>
         <div className="pb tight">
           {n.forecasts.length ? (
             <table className="t">
@@ -328,7 +330,7 @@ export function NewsView() {
                   const p = f.probs_json, lean = p ? p.slice(4).reduce((a: number, b: number) => a + b, 0) - p.slice(0, 3).reduce((a: number, b: number) => a + b, 0) : null;
                   return (
                     <tr key={f.id}>
-                      <td className="muted">{dt(f.ts)}</td><td className="sym">{short(f.symbol)}</td><td className="wrap">{f.title} <span className="muted">{f.source}</span></td>
+                      <td className="muted">{dt(f.ts)}</td><td className="sym"><Sym symbol={f.symbol} size={14} /></td><td className="wrap">{f.title} <span className="muted">{f.source}</span></td>
                       <td>{p ? <svg width={146} height={20}>{p.map((v: number, i: number) => <rect key={i} x={i * 21} y={20 - v * 20} width={18} height={Math.max(v * 20, 1)} fill={i < 3 ? "var(--down)" : i > 3 ? "var(--up)" : "#6a6a6a"} data-tip={`bin ${i}: ${(100 * v).toFixed(1)}%`} />)}</svg> : <span className="tag err">{f.error_kind || "—"}</span>}</td>
                       <td className={`r ${ud(lean)}`}>{sg(lean, 2)}</td>
                       <td className="r">{f.label_json ? `${sg(f.label_json.return_bp, 1)} bp · bin ${f.label_json.bin}` : <span className="muted">pending</span>}</td>
@@ -341,12 +343,12 @@ export function NewsView() {
         </div>
       </section>
       <section className="pnl">
-        <div className="ph"><span className="code">TOP</span>Headlines</div>
+        <div className="ph"><PhIcon code="TOP" />Headlines</div>
         <div className="pb tight">
           <table className="t"><tbody>
             {n.headlines.map((h: any) => (
               <tr key={h.id}><td className="muted">{h.published_ts ? dt(h.published_ts) : ""}</td><td className="amb">{h.source}</td>
-                <td className="wrap"><a href={h.link} target="_blank" rel="noopener noreferrer" style={{ color: "var(--text)" }}>{h.title}</a> {h.symbols.map((s: string) => <span key={s} className="tag flat">{short(s)}</span>)}{h.market_wide && <> <span className="tag amb">MKT</span></>}</td></tr>
+                <td className="wrap"><a href={h.link} target="_blank" rel="noopener noreferrer" style={{ color: "var(--text)" }}>{h.title}</a> {h.symbols.map((s: string) => <span key={s} className="tag flat"><Sym symbol={s} size={12} /></span>)}{h.market_wide && <> <span className="tag amb">market-wide</span></>}</td></tr>
             ))}
           </tbody></table>
         </div>
@@ -366,11 +368,11 @@ export function LogView() {
   return (
     <main className="view on">
       <section className="pnl">
-        <div className="ph"><span className="code">LOG</span>System events<span className="ph-r">live</span></div>
+        <div className="ph"><PhIcon code="LOG" />System events<span className="ph-r">live</span></div>
         <div className="pb tight">
           <table className="t">
-            <thead><tr><th>Time</th><th>Level</th><th>Kind</th><th>Sym</th><th>Message</th></tr></thead>
-            <tbody>{ev.map((e) => <tr key={e.id}><td className="muted">{dt(e.ts)}</td><td><span className={`tag ${lvl(e.level)}`}>{String(e.level).toUpperCase()}</span></td><td>{e.kind}</td><td className="sym">{e.symbol ? short(e.symbol) : ""}</td><td className="wrap">{e.message}</td></tr>)}</tbody>
+            <thead><tr><th>Time</th><th>Level</th><th>Kind</th><th>Market</th><th>Message</th></tr></thead>
+            <tbody>{ev.map((e) => <tr key={e.id}><td className="muted">{dt(e.ts)}</td><td><span className={`tag ${lvl(e.level)}`}>{String(e.level)}</span></td><td>{e.kind}</td><td className="sym">{e.symbol ? <Sym symbol={e.symbol} size={14} /> : ""}</td><td className="wrap">{e.message}</td></tr>)}</tbody>
           </table>
         </div>
       </section>
