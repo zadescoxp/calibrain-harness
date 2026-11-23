@@ -10,10 +10,53 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[1]  # source tree (or the bundled app's resources)
+# Where mutable state lives: .env (keys + settings), data/ctb.db, KILL. Defaults to the source tree so
+# `python -m ctb.server` works as before; the desktop app points CTB_HOME at a per-user app-data dir.
+HOME = Path(os.environ["CTB_HOME"]).expanduser() if os.environ.get("CTB_HOME") else ROOT
+ENV_PATH = HOME / ".env"
 
 
-def load_dotenv(path: Path = ROOT / ".env") -> None:
+def _init_home() -> None:
+    """App-data dir: owner-only, seeded on first run so nobody has to edit .env by hand."""
+    if HOME == ROOT:
+        return
+    HOME.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(HOME, 0o700)
+    except OSError:
+        pass
+    if not ENV_PATH.exists():
+        ENV_PATH.write_text("# Calibrain Harness settings and keys. Edited from the app (KEYS / CONFIG).\n"
+                            "CTB_VENUE=demo\n", encoding="utf-8")
+    try:
+        os.chmod(ENV_PATH, 0o600)
+    except OSError:
+        pass
+
+
+_init_home()
+
+
+def _load_restart_env() -> None:
+    """Env overrides a supervised restart left behind (ctb/server.py). Must run before the Settings
+    defaults below are evaluated, which happens when this module is imported."""
+    f = HOME / ".restart-env.json"
+    if os.environ.get("CTB_SUPERVISED") != "1" or not f.exists():
+        return
+    import json
+    try:
+        os.environ.update({k: str(v) for k, v in json.loads(f.read_text(encoding="utf-8")).items() if v})
+    except (OSError, ValueError):
+        pass
+    finally:
+        f.unlink(missing_ok=True)
+
+
+_load_restart_env()
+
+
+def load_dotenv(path: Path = ENV_PATH) -> None:
     if not path.exists():
         return
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -26,7 +69,7 @@ def load_dotenv(path: Path = ROOT / ".env") -> None:
             os.environ[key] = value.strip().strip('"').strip("'")
 
 
-def save_env(updates: dict[str, str], path: Path = ROOT / ".env") -> None:
+def save_env(updates: dict[str, str], path: Path = ENV_PATH) -> None:
     """Upsert KEY=value lines in .env (keeps comments/other keys), owner-only permissions."""
     for k, v in updates.items():
         if not k.replace("_", "").isalnum() or any(c in v for c in "\r\n"):
@@ -193,20 +236,42 @@ class Settings:
     daily_loss_limit_pct: float = _f("CTB_DAILY_LOSS_LIMIT_PCT", 3.0)
     max_venue_divergence_bp: float = _f("CTB_MAX_VENUE_DIVERGENCE_BP", 150)
 
-    # --- bybit (testnet only, enforced in code) ---
-    bybit_api_key: str = os.environ.get("BYBIT_API_KEY", "")
-    bybit_api_secret: str = os.environ.get("BYBIT_API_SECRET", "")
+    # --- bybit: paper-money venues only, enforced in code (ctb/broker/venue.py) ---
+    # testnet: api-testnet.bybit.com, its own thin book | demo: Bybit Demo Trading on the mainnet market
+    venue: str = os.environ.get("CTB_VENUE", "testnet").strip().lower()
+    # demo: book every fill at the worse of Bybit's report and the real mainnet book walk / fee schedule
+    cost_realism: bool = _b("CTB_COST_REALISM", True)
+    # keys are kept per venue (BYBIT_DEMO_API_KEY, BYBIT_TESTNET_API_KEY, ...) so switching venue in the
+    # UI never asks for them again; the old BYBIT_API_KEY / BYBIT_API_SECRET pair is the testnet pair
+    bybit_keys: dict = field(default_factory=lambda: _load_bybit_keys())
 
     # --- server ---
     host: str = os.environ.get("CTB_HOST", "127.0.0.1")
     port: int = _i("CTB_PORT", 8800)
-    db_path: Path = Path(os.environ.get("CTB_DB_PATH", str(ROOT / "data" / "ctb.db")))
-    kill_file: Path = ROOT / "KILL"
+    db_path: Path = Path(os.environ.get("CTB_DB_PATH", str(HOME / "data" / "ctb.db")))
+    kill_file: Path = HOME / "KILL"
 
     @property
     def kairos_api_key(self) -> str:
         # Exact variable name only, per the Kairos contract. Never substitute another key.
         return os.environ.get("KAIROS_API_KEY", "").strip()
+
+    @property
+    def bybit_api_key(self) -> str:
+        return self.bybit_keys.get(self.venue, ("", ""))[0]
+
+    @property
+    def bybit_api_secret(self) -> str:
+        return self.bybit_keys.get(self.venue, ("", ""))[1]
+
+    @property
+    def venue_spec(self):
+        from .broker.venue import get
+        return get(self.venue)
+
+    @property
+    def shadow_costs(self) -> bool:
+        return self.cost_realism and self.venue_spec.shadow_costs
 
     @property
     def model_spec(self):
@@ -279,7 +344,14 @@ class Settings:
             "kairos_key_configured": bool(self.kairos_api_key),
             "kairos_max_requests_per_hour": self.kairos_max_requests_per_hour,
             "bybit_keys_configured": bool(self.bybit_api_key and self.bybit_api_secret),
-            "venue": "bybit-testnet",
+            "venue": f"bybit-{self.venue}",
+            "venue_name": self.venue,
+            "venue_label": self.venue_spec.label,
+            "venue_keys_url": self.venue_spec.keys_url,
+            "venue_is_mainnet_book": self.venue_spec.public_rest == "https://api.bybit.com",
+            "cost_realism": self.shadow_costs,
+            "taker_fee_bp": self.taker_fee_bp,
+            "maker_fee_bp": self.maker_fee_bp,
             "strategy": self.strategy_view(),
         }
 
@@ -322,6 +394,128 @@ class Settings:
             setattr(self, k, v)
             env[self.STRATEGY_ENV[k]] = ",".join(v) if isinstance(v, list) else ("1" if v is True else "0" if v is False else str(v))
         return env
+
+
+# ---------------------------------------------------------------- settings editable from the UI
+# key -> (env var, kind, min, max, group, label, help[, choices]). Strategy v3 settings have their own
+# dialog (STRATEGY_ENV). "restart" settings are saved and the service restarts itself to apply them.
+_G_VENUE, _G_RISK, _G_GATES, _G_EXEC, _G_BRK, _G_MODEL = ("Venue & costs", "Risk", "Signal gates", "Execution",
+                                                         "Brackets", "Model budget")
+EDITABLE: dict[str, tuple] = {
+    "venue": ("CTB_VENUE", "choice", None, None, _G_VENUE, "Order venue",
+              "demo = Bybit Demo Trading on the mainnet market · testnet = Bybit testnet book. Needs keys for that venue; "
+              "restarts the service, starts a new run and switches auto-trade off", ("demo", "testnet")),
+    "cost_realism": ("CTB_COST_REALISM", "bool", None, None, _G_VENUE, "Cost realism (demo)",
+                     "Book demo trades at the worse of Bybit's fill/fees and the mainnet book walk, fee schedule and funding"),
+    "taker_fee_bp": ("CTB_TAKER_FEE_BP", "float", 0, 50, _G_VENUE, "Taker fee bp", "Fee schedule for taker legs (Bybit VIP0 linear: 5.5)"),
+    "maker_fee_bp": ("CTB_MAKER_FEE_BP", "float", -5, 50, _G_VENUE, "Maker fee bp", "Fee schedule for maker legs (Bybit VIP0 linear: 2.0)"),
+    "slippage_bp": ("CTB_SLIPPAGE_BP", "float", 0, 100, _G_VENUE, "Taker entry slip bp", "Default until enough taker entries are measured"),
+    "stop_slip_bp": ("CTB_STOP_SLIP_BP", "float", 0, 200, _G_VENUE, "Stop slip bp",
+                     "Default stop slippage until measured; also the demo floor for exchange-triggered stops"),
+    "time_exit_slip_bp": ("CTB_TIME_EXIT_SLIP_BP", "float", 0, 100, _G_VENUE, "Time-exit slip bp", "Expected slippage of a horizon close"),
+
+    "risk_per_trade_pct": ("CTB_RISK_PER_TRADE_PCT", "float", 0.01, 5, _G_RISK, "Risk / trade %", "Equity lost if a strict trade's stop is hit"),
+    "explore_risk_pct": ("CTB_EXPLORE_RISK_PCT", "float", 0, 5, _G_RISK, "Explore risk / trade %", "Same for exploration trades"),
+    "max_leverage": ("CTB_MAX_LEVERAGE", "int", 1, 20, _G_RISK, "Max leverage", "Set on each symbol before its next entry"),
+    "max_positions": ("CTB_MAX_POSITIONS", "int", 1, 50, _G_RISK, "Max positions", "Open positions across all symbols"),
+    "max_same_side": ("CTB_MAX_SAME_SIDE", "int", 1, 50, _G_RISK, "Max same side", "Open positions in one direction"),
+    "max_open_risk_pct": ("CTB_MAX_OPEN_RISK_PCT", "float", 0.1, 20, _G_RISK, "Max open risk %", "Sum of open stop-risk, % of equity"),
+    "max_notional_usdt": ("CTB_MAX_NOTIONAL_USDT", "float", 10, 1_000_000, _G_RISK, "Max notional USDT", "Per position"),
+    "daily_loss_limit_pct": ("CTB_DAILY_LOSS_LIMIT_PCT", "float", 0.1, 50, _G_RISK, "Daily loss limit %", "Trading halts for the UTC day"),
+    "dd_throttle_pct": ("CTB_DD_THROTTLE_PCT", "float", 0, 50, _G_RISK, "Drawdown throttle %", "Run drawdown that halves risk (dynamic sizing)"),
+
+    "min_edge_r": ("CTB_MIN_EDGE_R", "float", 0, 2, _G_GATES, "Min edge R", "Required EV after costs, in R"),
+    "min_setup_quality": ("CTB_MIN_SETUP_QUALITY", "float", 0, 4, _G_GATES, "Min setup quality", "Model's setup score, 0–4"),
+    "min_direction_margin": ("CTB_MIN_DIRECTION_MARGIN", "float", 0, 0.5, _G_GATES, "Min direction margin",
+                             "Long needs calibrated P(up) ≥ 0.5 + this"),
+    "allow_short": ("CTB_ALLOW_SHORT", "bool", None, None, _G_GATES, "Allow shorts", ""),
+    "explore_min_lean_r": ("CTB_EXPLORE_MIN_LEAN_R", "float", 0, 1, _G_GATES, "Explore min lean R", "|EV long − EV short| an exploration trade needs"),
+    "max_testnet_spread_bp": ("CTB_MAX_TESTNET_SPREAD_BP", "float", 0, 500, _G_GATES, "Max venue spread bp", "Spread of the book orders go to"),
+    "max_venue_divergence_bp": ("CTB_MAX_VENUE_DIVERGENCE_BP", "float", 0, 2000, _G_GATES, "Max venue divergence bp",
+                                "Venue price vs mainnet (≈0 on demo)"),
+
+    "max_entry_slip_bp": ("CTB_MAX_ENTRY_SLIP_BP", "float", 0, 200, _G_EXEC, "Entry IOC cap bp", "Taker entries take liquidity only this far past the best price"),
+    "exit_mode": ("CTB_EXIT_MODE", "choice", None, None, _G_EXEC, "Exit mode",
+                  "managed = resting target + watched stop with capped IOC exits · exchange = plain Bybit TP/SL (new trades)",
+                  ("managed", "exchange")),
+    "backstop_mult": ("CTB_BACKSTOP_MULT", "float", 1, 10, _G_EXEC, "Backstop × stop", "Exchange stop distance while the managed stop is watched"),
+    "exit_chase_step_bp": ("CTB_EXIT_CHASE_STEP_BP", "float", 1, 100, _G_EXEC, "Exit chase step bp", "IOC exit widens by this per step"),
+    "exit_chase_max_bp": ("CTB_EXIT_CHASE_MAX_BP", "float", 10, 1000, _G_EXEC, "Exit chase max bp", "Then a market order"),
+    "tpsl_trigger": ("CTB_TPSL_TRIGGER", "choice", None, None, _G_EXEC, "TP/SL trigger", "Exchange mode trigger price",
+                     ("LastPrice", "MarkPrice", "IndexPrice")),
+    "be_offset_bp": ("CTB_BE_OFFSET_BP", "float", 0, 50, _G_EXEC, "Break-even offset bp", "Stop goes this far past entry at break-even"),
+
+    "sl_atr": ("CTB_SL_ATR", "float", 0.1, 10, _G_BRK, "Stop × ATR (atr mode)", ""),
+    "tp_atr": ("CTB_TP_ATR", "float", 0.1, 20, _G_BRK, "Target × ATR (atr mode)", ""),
+    "min_sl_bp": ("CTB_MIN_SL_BP", "float", 1, 1000, _G_BRK, "Min stop bp (atr mode)", ""),
+    "max_sl_bp": ("CTB_MAX_SL_BP", "float", 1, 5000, _G_BRK, "Max stop bp", ""),
+    "min_sl_bp_vol": ("CTB_MIN_SL_BP_VOL", "float", 1, 1000, _G_BRK, "Min stop bp (vol mode)", ""),
+    "max_horizon_mult": ("CTB_MAX_HORIZON_MULT", "float", 1, 20, _G_BRK, "Max horizon ×", "Longest auto-extended horizon, × the profile horizon"),
+
+    "kairos_max_requests_per_hour": ("CTB_KAIROS_MAX_RPH", "int", 1, 10000, _G_MODEL, "Model requests / hour", "Hard hourly cap"),
+    "kairos_concurrency": ("CTB_KAIROS_CONCURRENCY", "int", 1, 32, _G_MODEL, "Concurrent requests", "At a bar close"),
+    "kairos_timeout_s": ("CTB_KAIROS_TIMEOUT_S", "float", 5, 600, _G_MODEL, "Request timeout s", ""),
+    "kairos_news_enabled": ("CTB_KAIROS_NEWS", "bool", None, None, _G_MODEL, "News questions", "Ask the model about news (Kairos)"),
+    "kairos_news_max_per_hour": ("CTB_KAIROS_NEWS_MAX_RPH", "int", 0, 1000, _G_MODEL, "News requests / hour", ""),
+}
+RESTART_SETTINGS = {"venue"}
+
+
+def config_view(s: "Settings") -> dict:
+    return {"fields": [{"k": k, "env": e[0], "kind": e[1], "min": e[2], "max": e[3], "group": e[4], "label": e[5], "help": e[6],
+                        "choices": list(e[7]) if len(e) > 7 else None, "restart": k in RESTART_SETTINGS} for k, e in EDITABLE.items()],
+            "values": {k: getattr(s, k) for k in EDITABLE}}
+
+
+def parse_config(s: "Settings", updates: dict) -> dict:
+    """Validate UI edits -> {key: typed value}, only for values that differ. Raises ValueError."""
+    out = {}
+    for k, v in updates.items():
+        if k not in EDITABLE:
+            raise ValueError(f"{k} is not an editable setting")
+        env, kind, lo, hi, _g, label, *_rest = EDITABLE[k]
+        if kind == "bool":
+            v = v if isinstance(v, bool) else str(v).strip().lower() in {"1", "true", "yes", "on"}
+        elif kind == "choice":
+            choices = EDITABLE[k][7]
+            v = next((c for c in choices if c.lower() == str(v).strip().lower()), None)
+            if v is None:
+                raise ValueError(f"{label} must be one of {', '.join(choices)}")
+        else:
+            try:
+                v = float(v)
+            except (TypeError, ValueError):
+                raise ValueError(f"{label} must be a number") from None
+            if kind == "int":
+                if v != int(v):
+                    raise ValueError(f"{label} must be a whole number")
+                v = int(v)
+            if not lo <= v <= hi:
+                raise ValueError(f"{label} must be between {lo:g} and {hi:g}")
+        if v != getattr(s, k):
+            out[k] = v
+    return out
+
+
+def config_env(values: dict) -> dict[str, str]:
+    return {EDITABLE[k][0]: ("1" if v is True else "0" if v is False else str(v)) for k, v in values.items()}
+
+
+def bybit_env_names(venue: str) -> tuple[str, str]:
+    v = venue.upper()
+    return f"BYBIT_{v}_API_KEY", f"BYBIT_{v}_API_SECRET"
+
+
+def _load_bybit_keys() -> dict:
+    from .broker.venue import VENUES
+    out = {}
+    for v in VENUES:
+        k, sec = bybit_env_names(v)
+        key, secret = os.environ.get(k, "").strip(), os.environ.get(sec, "").strip()
+        if v == "testnet" and not (key and secret):
+            key, secret = os.environ.get("BYBIT_API_KEY", "").strip(), os.environ.get("BYBIT_API_SECRET", "").strip()
+        out[v] = (key, secret)
+    return out
 
 
 def _models():
