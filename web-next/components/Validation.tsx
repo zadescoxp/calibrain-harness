@@ -6,9 +6,10 @@ import { api } from "@/lib/api";
 import { setState, useStore } from "@/lib/store";
 import { fx, isNum, sg, short, ud } from "@/lib/format";
 import { KV } from "./Monitor";
+import { ExpandBtn, PhIcon, Sym } from "./ui";
 
 const Panel = ({ code, title, span2, tight, children }: { code: string; title: string; span2?: boolean; tight?: boolean; children: React.ReactNode }) => (
-  <section className={`pnl${span2 ? " span2" : ""}`}><div className="ph"><span className="code">{code}</span>{title}</div><div className={`pb${tight ? " tight" : ""}`}>{children}</div></section>
+  <section className={`pnl${span2 ? " span2" : ""}`}><div className="ph"><PhIcon code={code} /><span className="ph-title">{title}</span><span className="ph-r"><ExpandBtn /></span></div><div className={`pb${tight ? " tight" : ""}`}>{children}</div></section>
 );
 
 const VERDICT: Record<string, string> = { skill: "up", "no skill": "dn", undecided: "amb", "not enough data": "muted" };
@@ -91,12 +92,12 @@ export function ValidationView() {
   useEffect(() => { load(); }, [load]);
   const toolbar = (
     <div className="toolbar">
-      <span className="code">VALID</span><b>Validation · independent windows</b>
-      <select value={f.model} onChange={(e) => setF({ ...f, model: e.target.value })}><option value="">ACTIVE MODEL</option>{Object.entries<any>(models).map(([p, m]) => <option key={p} value={p}>{m.label.toUpperCase()}</option>)}</select>
-      <select value={f.tf} onChange={(e) => setF({ ...f, tf: e.target.value })}><option value="">ACTIVE TRADE TF</option>{st && Object.entries<any>(st.tf_profiles).map(([tf, p]) => <option key={tf} value={tf}>TRADE TF {p.label}</option>)}</select>
-      <input className="runin" placeholder="RUN #" value={f.run} onChange={(e) => setF({ ...f, run: e.target.value.replace(/\D/g, "") })} />
-      <button className="kbtn" onClick={() => load()}>REFRESH</button>
-      <button className="kbtn amber" onClick={() => setState({ modal: { kind: "strategy" } })}>STRATEGY</button>
+      <b><PhIcon code="VALID" size={18} />Validation, independent windows</b>
+      <select value={f.model} onChange={(e) => setF({ ...f, model: e.target.value })}><option value="">Active model</option>{Object.entries<any>(models).map(([p, m]) => <option key={p} value={p}>{m.label}</option>)}</select>
+      <select value={f.tf} onChange={(e) => setF({ ...f, tf: e.target.value })}><option value="">Active trading timeframe</option>{st && Object.entries<any>(st.tf_profiles).map(([tf, p]) => <option key={tf} value={tf}>Trading every {p.label.toLowerCase()}</option>)}</select>
+      <input className="runin" placeholder="Run #" value={f.run} onChange={(e) => setF({ ...f, run: e.target.value.replace(/\D/g, "") })} />
+      <button className="btn" onClick={() => load()}>Refresh</button>
+      <button className="btn primary" onClick={() => setState({ modal: { kind: "strategy" } })}>Strategy</button>
     </div>
   );
   if (err) return <main className="view on">{toolbar}<div className="empty">{err}</div></main>;
@@ -123,11 +124,11 @@ export function ValidationView() {
               <thead><tr><th>Symbol</th><th className="r">Windows</th><th className="r">Bracket skill</th><th className="r">Interval</th><th>Verdict</th>
                 <th className="r">Direction</th><th className="r">Big move</th><th className="r">Return dist.</th><th>Strict trading</th></tr></thead>
               <tbody>{syms.map(([sym, b]) => (
-                <tr key={sym}><td className="sym">{short(sym)}</td><td className="r">{b.bracket.independent_windows}</td>
+                <tr key={sym}><td className="sym"><Sym symbol={sym} size={14} /></td><td className="r">{b.bracket.independent_windows}</td>
                   <td className={`r ${ud(b.bracket.skill)}`}>{sg(b.bracket.skill, 3)}</td><td className="r">{ci(b.bracket.ci90)}</td><td><Verdict v={b.bracket.verdict} /></td>
                   <td className={`r ${ud(b.direction?.skill)}`}>{sg(b.direction?.skill, 3)}</td><td className={`r ${ud(b.big_move?.skill)}`}>{sg(b.big_move?.skill, 3)}</td>
                   <td className={`r ${ud(b.return_distribution?.skill)}`}>{sg(b.return_distribution?.skill, 3)}</td>
-                  <td className="wrap">{v.validated?.[sym]?.ok ? <span className="up">VALIDATED</span> : <span className="muted">{v.validated?.[sym]?.why}</span>}</td></tr>
+                  <td className="wrap">{v.validated?.[sym]?.ok ? <span className="tag long">validated</span> : <span className="muted">{v.validated?.[sym]?.why}</span>}</td></tr>
               ))}</tbody>
             </table>
           ) : <div className="empty">Needs labelled decisions</div>}
