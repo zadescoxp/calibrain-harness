@@ -2,7 +2,7 @@
 import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, post } from "@/lib/api";
 import { loadOverview, selectSymbol, selectTf } from "@/lib/data";
-import { setState, useModelLabel, useStore } from "@/lib/store";
+import { setState, useModelLabel, useStore, venueOf } from "@/lib/store";
 import { age, cssVar, dt, fx, hhmm, hhmmss, isNum, px, sg, short, TFL, ud, usd } from "@/lib/format";
 import { PerfChart, PerfLegend, PriceChart } from "./Charts";
 import { ask, setPosCap, useNow } from "./TopBar";
@@ -255,23 +255,25 @@ function Account() {
   const now = useNow();
   const a = ov?.account, w = a?.wallet || {};
   const closePos = async (sym: string) => {
-    if (confirm(`Market-close ${sym} on testnet (reduce-only)?`)) {
+    if (confirm(`Market-close ${sym} on ${venueOf(ov?.settings).name} (reduce-only)?`)) {
       await post("/api/close", { symbol: sym });
       loadOverview();
     }
   };
-  if (!a) return <><Ph code="PRTU">Account · testnet</Ph><div className="empty">{ov?.executor_error || "No testnet keys"}</div></>;
+  const vn = venueOf(ov?.settings);
+  if (!a) return <><Ph code="PRTU">Account · {vn.name}</Ph><div className="empty">{ov?.executor_error || `No ${vn.name} keys`}</div></>;
   const st = ov.settings;
   const cells: [string, React.ReactNode, string][] = [
     ["Equity", fx(w.equity), "USDT · UTA"], ["Available", fx(w.available), "USDT"],
     ["Unrealised", <span key="u" className={ud(w.unrealized_pnl)}>{sg(w.unrealized_pnl)}</span>, "USDT"],
-    ["Today PnL", <span key="d" className={ud(a.daily_pnl)}>{sg(a.daily_pnl)}</span>, `halts at −${st.daily_loss_limit_pct}%`],
+    ["Today PnL", <span key="d" className={ud(a.daily_pnl)}>{sg(a.daily_pnl)}</span>,
+      a.cost_realism ? `booked · realism −${fx(a.realism_adj_today ?? 0)} · halts −${st.daily_loss_limit_pct}%` : `halts at −${st.daily_loss_limit_pct}%`],
     ["Positions", <span key="p">{a.positions.length}/{st.max_positions} <button className="mini" onClick={() => setPosCap()} data-tip="Change the max number of open positions. Applies to new entries only.">CAP</button></span>, `${a.open_orders} open orders`],
     ["Risk / trade", `${st.exploration_mode ? Math.min(st.explore_risk_pct, st.risk_per_trade_pct) : st.risk_per_trade_pct}%`, `entry cap ${st.max_entry_slip_bp}bp · ≤${st.max_leverage}x`],
   ];
   return (
     <>
-      <Ph code="PRTU" right={a.last_sync ? `${a.private_stream ? "stream" : "poll"} · sync ${age(now / 1000 - a.last_sync)} ago` : ""}>Account · testnet</Ph>
+      <Ph code="PRTU" right={a.last_sync ? `${a.private_stream ? "stream" : "poll"} · sync ${age(now / 1000 - a.last_sync)} ago` : ""}>Account · {vn.name}{vn.realism ? " · equity as Bybit reports" : ""}</Ph>
       <div className="pb tight" style={{ flex: "none" }}>
         <div className="acct-grid">{cells.map(([l, n, s]) => <div className="cell" key={l}><div className="l">{l}</div><div className="n">{n}</div><div className="s">{s}</div></div>)}</div>
       </div>
