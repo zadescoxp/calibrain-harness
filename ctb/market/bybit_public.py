@@ -117,7 +117,8 @@ class BybitPublicFeed:
                     except (TypeError, ValueError):
                         continue
                 uni.sort(key=lambda x: x["turnover24h"], reverse=True)
-                self.store.context["universe"] = uni[:40]  # market map
+                self.store.context["universe"] = uni[:40]  # market map (the panel's default size)
+                self.store.context["universe_map"] = uni  # every USDT perp, for the larger map views
                 self.store.context["universe_all"] = uni[:UNIVERSE_SIZE]  # symbol picker
                 self.store.context["universe_ts"] = time.time()
             except Exception as exc:  # noqa: BLE001
