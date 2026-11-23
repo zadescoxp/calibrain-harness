@@ -9,7 +9,8 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "lightweight-charts": "^4.2.0",
+    "lightweight-charts": "^5.3.0",
+    "lucide-react": "^1.78.0",
     "next": "16.4.6",
     "react": "19.3.0",
     "react-dom": "19.3.0"
@@ -18,8 +19,10 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@web3icons/core": "^4.0.61",
     "eslint": "^9",
     "eslint-config-next": "16.4.6",
+    "simple-icons": "^16.38.1",
     "typescript": "^5"
   }
 }
