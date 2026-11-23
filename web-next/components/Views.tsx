@@ -1,8 +1,8 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { loadNews } from "@/lib/data";
-import { useStore } from "@/lib/store";
+import { useStore, useVenue } from "@/lib/store";
 import { dt, fx, isNum, sg, short, ud } from "@/lib/format";
 import { KV, openDecision } from "./Monitor";
 
@@ -61,6 +61,7 @@ const dist = (d: any, unit = "bp") => (d ? `${sg(d.mean, 1)}${unit} mean · p90 
 
 export function EvalView() {
   const st = useStore((s) => s.ov?.settings);
+  const venue = useVenue();
   const [f, setF] = useState({ symbol: "", tf: "", hours: "", qset: "", run: "", model: "" });
   const models = useStore((s) => s.ov?.settings.models) || {};
   const runsData = useRuns(0);
@@ -107,7 +108,8 @@ export function EvalView() {
     ["ρ(EV, realised R)", sg(edge.spearman_ev_vs_realised_r, 3), `n = ${edge.n || 0} side-decisions`],
     ["Strict signals R", sg(edge.strict_signals_mean_r, 3), `n = ${edge.strict_signals_n || 0} · win ${pct(edge.strict_signals_win_rate)}`],
     ["Explore signals R", sg(edge.exploration_signals_mean_r, 3), `n = ${edge.exploration_signals_n || 0} · win ${pct(edge.exploration_signals_win_rate)}`],
-    ["Testnet net PnL", <span key="p" className={ud(t.net_pnl_usdt)}>{sg(t.net_pnl_usdt)}</span>, `${t.closed} trades · from Bybit closed-PnL`],
+    [`${venue.name === "demo" ? "Demo" : "Testnet"} net PnL`, <span key="p" className={ud(t.net_pnl_usdt)}>{sg(t.net_pnl_usdt)}</span>,
+      t.realism_trades ? `${t.closed} trades · Bybit ${sg(t.venue_pnl_usdt)} − realism ${fx(t.realism_adj_usdt)}` : `${t.closed} trades · from Bybit closed-PnL`],
   ];
   const qr = (b: any, k = "brier") => b && b.n ? (
     <tr key={b.name}><td className="amb">{b.name}</td><td className="r">{b.n}</td><td className="r">{fx(b[k], 4)}</td><td className="r">{fx(b[k + "_climatology"], 4)}</td><td className="r">{fx(b[k + "_uniform"], 4)}</td>
@@ -161,15 +163,23 @@ export function EvalView() {
           ["Latency p99", isNum(ops.latency_ms_p99) ? fx(ops.latency_ms_p99, 0) + " ms" : "—"], ["Input tokens mean / max", `${fx(ops.input_tokens_mean, 0)} / ${ops.input_tokens_max ?? "—"}`],
           ["Retried", ops.retried_requests], ["Policy actions", Object.entries<any>(m.policy.actions).map(([k, v]) => `${k} ${v}`).join(", ") || "—"],
         ]} /></Panel>
-        <Panel code="PNL" title="Testnet trading · Bybit closed-PnL, every fill" tight>{t.closed ? <KV rows={[
+        <Panel code="PNL" title={`${venue.label} trading · Bybit closed-PnL, every fill${t.realism_trades ? " · cost realism" : ""}`} tight>{t.closed ? <KV rows={[
           ["Closed trades", t.closed], ["Net PnL (after fees)", <span key="n" className={ud(t.net_pnl_usdt)}>{sg(t.net_pnl_usdt)} USDT</span>], ["Fees", `${fx(t.fees_usdt)} USDT`],
+          ...(t.realism_trades ? [
+            ["Bybit-reported PnL", `${sg(t.venue_pnl_usdt)} USDT`, "Demo closed-PnL before re-booking"],
+            ["Realism charge", `${fx(t.realism_adj_usdt)} USDT`, `${t.realism_trades} trades · slippage vs mainnet book walk + fee schedule + funding`],
+            ["Funding", `${sg(t.funding_usdt)} USDT`, "Mainnet funding settlements held through; + = paid"],
+          ] as [string, React.ReactNode, string][] : []),
           ["Win rate", fx(t.win_rate, 3)], ["Profit factor", fx(t.profit_factor, 2)], ["Avg realised R", sg(t.avg_r, 3), "PnL ÷ (qty × |entry − live stop|)"], ["Avg predicted EV", sg(t.avg_predicted_ev_r, 3) + "R"],
           ["Max drawdown", `${fx(t.max_drawdown_usdt)} USDT`],
           ["By mode", Object.entries<any>(t.by_mode || {}).map(([k, v]) => `${k} ${v.n} · ${sg(v.pnl)} · win ${(100 * v.win_rate).toFixed(0)}%`).join(" | ") || "—"],
           ["Exit reasons", Object.entries<any>(t.by_reason).map(([k, v]) => `${k} ${v}`).join(", ")],
-        ]} /> : <div className="empty">No closed testnet trades yet</div>}</Panel>
-        <Panel code="EXEC" title="Execution quality · real testnet fills" tight><KV rows={[
-          ["Entry slippage", dist(ex.entry_slip_bp), "Fill vs best testnet price at order time; + = worse"],
+        ]} /> : <div className="empty">No closed {venue.name} trades yet</div>}</Panel>
+        <Panel code="EXEC" title={`Execution quality · ${venue.name} fills`} tight><KV rows={[
+          ["Entry slippage", dist(ex.entry_slip_bp), venue.demo ? "Booked: worse of the demo fill and the mainnet book walk; + = worse" : "Fill vs best testnet price at order time; + = worse"],
+          ...(ex.venue_entry_slip_bp ? [["Entry slippage (Bybit)", dist(ex.venue_entry_slip_bp), "Demo fill as Bybit reported it"]] as [string, React.ReactNode, string][] : []),
+          ...(Object.keys(ex.maker_fill_check || {}).length ? [["Maker fills", Object.entries<any>(ex.maker_fill_check).map(([k, v]) => `${k} ${v}`).join(" · "), "through = mainnet traded past our price (real fill likely) · touch = queue-dependent"]] as [string, React.ReactNode, string][] : []),
+          ...(Object.keys(ex.tp_fill_check || {}).length ? [["Target fills", Object.entries<any>(ex.tp_fill_check).map(([k, v]) => `${k} ${v}`).join(" · "), "same check for resting take-profits"]] as [string, React.ReactNode, string][] : []),
           ["Stop exit slippage", dist(ex.stop_exit_slip_bp), "Stop fill vs trigger; + = worse"],
           ["Target exit slippage", dist(ex.target_exit_slip_bp), "Target fill vs trigger; + = worse"],
           ["Entry latency", ex.entry_latency_ms ? `${fx(ex.entry_latency_ms.p50, 0)} ms p50 · p90 ${fx(ex.entry_latency_ms.p90, 0)}` : "—", "Order sent → fill confirmed"],
@@ -186,38 +196,65 @@ export function EvalView() {
 const pct0 = (x: any) => (isNum(x) ? (100 * Number(x)).toFixed(0) + "%" : "—");
 const when = (r: any) => (r.started_ts ? `${dt(r.started_ts)} → ${r.ended_ts ? dt(r.ended_ts) : "now"}` : "—");
 
-function RunsTable({ runs, overall, sel, onSel }: { runs: any[]; overall: any; sel: number | null; onSel: (id: number | null) => void }) {
-  const row = (r: any, isAll = false) => {
-    const c = r.config_json || {};
-    return (
-      <tr key={isAll ? "all" : r.id} className={`click ${(isAll ? sel === null : sel === r.id) ? "sel" : ""}`} onClick={() => onSel(isAll ? null : r.id)}>
-        <td className="sym">{isAll ? "OVERALL" : `RUN ${r.id}`}{r.current && <> <span className="tag long">LIVE</span></>}</td>
-        <td className="wrap" style={{ maxWidth: 280 }}>{isAll ? "all runs combined" : r.name.replace(/^Run \d+ · /, "")}</td>
-        <td className="muted">{when(r)}</td>
-        <td>{isAll ? "—" : <><b className="amb">{c.model_provider ? String(c.model_provider).toUpperCase() : "KAIROS"}</b> · {c.qset || "—"} · {c.exploration_mode ? <span className="tag xp">EXPLORE</span> : <span className="tag amb">STRICT</span>} · {(c.symbols || []).length} sym</>}</td>
-        <td className="r">{r.decisions}</td>
-        <td className="r">{r.labelled}</td>
-        <td className="r">{r.closed}{r.open_trades ? <span className="muted"> +{r.open_trades} open</span> : ""}</td>
-        <td className={`r ${ud(r.net_pnl)}`}>{sg(r.net_pnl)}</td>
-        <td className="r">{fx(r.fees)}</td>
-        <td className="r">{pct0(r.win_rate)}</td>
-        <td className={`r ${ud(r.avg_r)}`}>{sg(r.avg_r, 2)}</td>
-        <td className="r">{fx(r.profit_factor, 2)}</td>
-        <td className="r">{isNum(r.entry_slip_bp) ? sg(r.entry_slip_bp, 1) : "—"}</td>
-        <td className="r">{isNum(r.stop_slip_bp) ? sg(r.stop_slip_bp, 1) : "—"}</td>
-        <td className="r" data-tip="Signals scored on mainnet labels (traded or not)">{r.strict_n ? `${r.strict_n} · ${sg(r.strict_r, 2)}R` : "0"} / {r.explore_n ? `${r.explore_n} · ${sg(r.explore_r, 2)}R` : "0"}</td>
-        <td className={`r ${ud(r.skill_long)}`}>{sg(r.skill_long, 2)} / {sg(r.skill_short, 2)}</td>
-        <td className={`r ${ud(r.vs_base_long)}`}>{sg(r.vs_base_long, 2)}</td>
-      </tr>
-    );
-  };
+const runSetup = (r: any) => String(r.name || "").replace(/^Run \d+ · /, "");
+const runModel = (r: any) => (r.config_json?.model_provider ? String(r.config_json.model_provider).toUpperCase() : "KAIROS");
+
+/** Run picker: one line when closed, a compact list when open, and the chosen run's numbers in a strip. */
+function RunPicker({ runs, overall, sel, onSel }: { runs: any[]; overall: any; sel: number | null; onSel: (id: number | null) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const off = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", off); document.addEventListener("keydown", esc);
+    return () => { document.removeEventListener("mousedown", off); document.removeEventListener("keydown", esc); };
+  }, [open]);
+  const list = [...runs].reverse(); // newest first
+  const cur = sel === null ? overall : runs.find((r) => r.id === sel) || overall;
+  const label = (r: any, isAll: boolean) => (
+    <>
+      <b className="amb">{isAll ? "ALL RUNS" : `RUN ${r.id}`}</b>{!isAll && r.current && <span className="tag long">LIVE</span>}
+      <span className="rp-setup">{isAll ? "all runs combined" : runSetup(r)}</span>
+    </>
+  );
+  const pick = (id: number | null) => { onSel(id); setOpen(false); };
+  const item = (r: any, isAll = false) => (
+    <button key={isAll ? "all" : r.id} className={`rp-item ${(isAll ? sel === null : sel === r.id) ? "on" : ""}`} onClick={() => pick(isAll ? null : r.id)}>
+      <div className="rp-l1">{label(r, isAll)}</div>
+      <div className="rp-l2">
+        <span>{when(r)}</span>
+        {!isAll && <span>{runModel(r)} · {r.config_json?.exploration_mode ? "explore" : "strict"} · {(r.config_json?.symbols || []).length} sym</span>}
+        <span>{r.closed ?? 0} trades{r.open_trades ? ` +${r.open_trades} open` : ""}</span>
+        <span className={ud(r.net_pnl)}>{sg(r.net_pnl)} $</span>
+        <span>win {pct0(r.win_rate)}</span>
+      </div>
+    </button>
+  );
+  const stat = (l: string, v: React.ReactNode, cls = "", tip?: string) => <div className="rp-stat" data-tip={tip}><span>{l}</span><b className={cls}>{v}</b></div>;
   return (
-    <table className="t">
-      <thead><tr><th>Run</th><th>Setup</th><th>Period</th><th>Config</th><th className="r">Model req</th><th className="r">Labelled</th><th className="r">Trades</th>
-        <th className="r">Net PnL $</th><th className="r">Fees $</th><th className="r">Win</th><th className="r">Avg R</th><th className="r">PF</th>
-        <th className="r">Entry slip</th><th className="r">Stop slip</th><th className="r">Strict / explore signals</th><th className="r">Skill L / S</th><th className="r">vs base</th></tr></thead>
-      <tbody>{runs.map((r) => row(r))}{overall && row(overall, true)}</tbody>
-    </table>
+    <div className="runpick" ref={ref}>
+      <button className={`rp-btn ${open ? "open" : ""}`} onClick={() => setOpen(!open)} aria-expanded={open}>
+        {cur ? label(cur, sel === null) : "Loading runs…"}<span className="rp-caret">▾</span>
+      </button>
+      {cur && (
+        <div className="rp-stats">
+          {stat("Period", when(cur))}
+          {sel !== null && stat("Model", `${runModel(cur)} · ${cur.config_json?.qset || "—"}`)}
+          {stat("Trades", <>{cur.closed ?? 0}{cur.open_trades ? <span className="muted"> +{cur.open_trades}</span> : null}</>)}
+          {stat("Net PnL $", sg(cur.net_pnl), ud(cur.net_pnl))}
+          {stat("Fees $", fx(cur.fees))}
+          {stat("Win", pct0(cur.win_rate))}
+          {stat("Avg R", sg(cur.avg_r, 2), ud(cur.avg_r))}
+          {stat("PF", fx(cur.profit_factor, 2))}
+          {stat("Entry / stop slip", `${isNum(cur.entry_slip_bp) ? sg(cur.entry_slip_bp, 1) : "—"} / ${isNum(cur.stop_slip_bp) ? sg(cur.stop_slip_bp, 1) : "—"}`, "", "bp; + = worse")}
+          {stat("Signals S / X", `${cur.strict_n || 0}·${sg(cur.strict_r, 2)}R / ${cur.explore_n || 0}·${sg(cur.explore_r, 2)}R`, "", "Strict / explore signals scored on mainnet labels (traded or not)")}
+          {stat("Skill L / S", `${sg(cur.skill_long, 2)} / ${sg(cur.skill_short, 2)}`, ud(cur.skill_long))}
+          {stat("Requests", `${cur.decisions ?? "—"} · ${cur.labelled ?? "—"} lab`)}
+        </div>
+      )}
+      {open && <div className="rp-menu">{overall && item(overall, true)}{list.map((r) => item(r))}</div>}
+    </div>
   );
 }
 
@@ -228,6 +265,7 @@ export function useRuns(rev: number) {
 }
 
 export function TradesView() {
+  const venue = useVenue();
   const rev = useStore((s) => s.rev.trades);
   const [run, setRun] = useState<number | null>(null);
   const [ts, setTs] = useState<any[] | null>(null);
@@ -235,12 +273,12 @@ export function TradesView() {
   useEffect(() => { api<any[]>(run ? `/api/trades?run=${run}` : "/api/trades").then(setTs).catch(() => {}); }, [rev, run]);
   return (
     <main className="view on">
-      <section className="pnl" style={{ marginBottom: 4 }}>
-        <div className="ph"><span className="code">RUNS</span>Test runs · click a row to filter the trades below<span className="ph-r">PnL from Bybit closed-PnL · signals and skill from mainnet labels</span></div>
-        <div className="pb tight scroll">{runs ? <RunsTable runs={runs.runs} overall={runs.overall} sel={run} onSel={setRun} /> : <div className="empty">Loading runs…</div>}</div>
+      <section className="pnl" style={{ marginBottom: 4, overflow: "visible" }}>
+        <div className="ph"><span className="code">RUNS</span>Test run<span className="ph-r">PnL from Bybit closed-PnL · signals and skill from mainnet labels</span></div>
+        {runs ? <RunPicker runs={runs.runs} overall={runs.overall} sel={run} onSel={setRun} /> : <div className="empty">Loading runs…</div>}
       </section>
       <section className="pnl">
-        <div className="ph"><span className="code">TRD</span>Bot trades · {run ? `Run ${run}` : "all runs"} · Bybit testnet<span className="ph-r">P&amp;L, fees and exit price summed from every Bybit closed-PnL row</span></div>
+        <div className="ph"><span className="code">TRD</span>Bot trades · {run ? `Run ${run}` : "all runs"} · {venue.label.toLowerCase().replace("bybit", "Bybit")}<span className="ph-r">P&amp;L, fees and exit price summed from every Bybit closed-PnL row</span></div>
         <div className="pb tight scroll">
           {!ts ? <div className="empty">Loading…</div> : !ts.length ? <div className="empty">No trades yet. They appear once a model key is set and AUTO-TRADE is on.</div> : (
             <table className="t">
