@@ -38,6 +38,15 @@ PUSH_MS = 100
 DEV_ORIGINS = {"localhost:3000", "127.0.0.1:3000"}  # `next dev`
 
 
+LOCAL_HOSTNAMES = {"127.0.0.1", "localhost", "[::1]"}
+
+
+def _allowed_host(host: str, bind_host: str) -> bool:
+    """Reject DNS-rebinding requests: the Host header must name this machine, not a remote domain."""
+    name = host.rsplit(":", 1)[0] if not host.endswith("]") else host
+    return name in LOCAL_HOSTNAMES or (bind_host not in ("0.0.0.0", "::") and name == bind_host)
+
+
 def _allowed_origin(origin: str, host: str) -> bool:
     o = origin.split("://", 1)[-1]
     return o == host or o in DEV_ORIGINS
@@ -69,6 +78,8 @@ async def same_origin_only(request: web.Request, handler):
     """Block cross-site requests: any web page you visit could otherwise POST to this local
     server (toggle trading, swap keys). Require JSON (forces a CORS preflight we never grant)
     and, when the browser sends an Origin, that it is this server."""
+    if not _allowed_host(request.host, os.environ.get("CTB_HOST", "127.0.0.1")) and os.environ.get("CTB_ALLOW_ANY_HOST") != "1":
+        return j({"error": "unexpected Host header (set CTB_ALLOW_ANY_HOST=1 to serve other hostnames)"}, 421)
     if request.method not in ("GET", "HEAD", "OPTIONS"):
         origin = request.headers.get("Origin")
         if origin and not _allowed_origin(origin, request.host):

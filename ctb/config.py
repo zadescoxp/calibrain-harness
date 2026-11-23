@@ -56,7 +56,9 @@ def _load_restart_env() -> None:
 _load_restart_env()
 
 
-def load_dotenv(path: Path = ENV_PATH) -> None:
+def load_dotenv(path: Path | None = None) -> None:
+    """CTB_ENV_FILE points at another env file (the tests use it to ignore the local .env)."""
+    path = path or Path(os.environ.get("CTB_ENV_FILE") or ENV_PATH)
     if not path.exists():
         return
     for line in path.read_text(encoding="utf-8").splitlines():
