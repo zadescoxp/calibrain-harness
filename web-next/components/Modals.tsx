@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api, post } from "@/lib/api";
 import { loadOverview, selectTf } from "@/lib/data";
-import { setState, useStore } from "@/lib/store";
+import { setState, useStore, useVenue } from "@/lib/store";
 import { age, dt, fx, hrs, sg, short, ud, usd } from "@/lib/format";
 
 function Dialog({ className, children }: { className?: string; children: React.ReactNode }) {
@@ -34,6 +34,7 @@ export function Modals() {
   if (modal.kind === "tf") return <TfModal tf={modal.data} />;
   if (modal.kind === "universe") return <UniverseModal />;
   if (modal.kind === "strategy") return <StrategyModal />;
+  if (modal.kind === "config") return <ConfigModal />;
   return null;
 }
 
@@ -70,6 +71,7 @@ function HelpModal() {
     ["PRB", "Ask + repeat & mirror consistency probes (4 requests)"], ["1M 5M 15M 1H 4H", "Chart timeframe (view only)"],
     ["POS 10", "Max open positions (1–50); new entries only"], ["TF 1M · TF 5M · TF 15M · TF 1H", "Trading timeframe: how often the model decides and trades"], ["MODEL", "Kairos or Jev: switch in the function-key bar (starts a new run)"],
     ["UNIV", "Choose the symbols the bot watches and trades"], ["STRAT", "Strategy: brackets, entries, mirror averaging, triggers, filters, sizing"],
+    ["CONFIG · VENUE", "Every other setting: venue (demo / testnet), costs, risk, gates, execution, model budget"],
     ["MON EVAL VALID TRD NEWS LOG", "Switch screen (F1 F2 F6 F3 F4 F5)"], ["KEYS · HELP", "API credentials · this list"], ["/", "Focus the command line from anywhere"],
   ];
   return (
@@ -128,6 +130,35 @@ function TfModal({ tf }: { tf: string }) {
 }
 
 type Msg = { ok: boolean; text: string } | null;
+/** The service re-executes itself after a venue or universe change: wait for it, then reload. */
+function waitForRestart(onFail: (m: string) => void) {
+  const t0 = Date.now();
+  const wait = async () => {
+    try {
+      await api("/api/overview");
+      location.reload();
+    } catch {
+      if (Date.now() - t0 < 90_000) setTimeout(wait, 1500);
+      else onFail("service did not come back within 90 s");
+    }
+  };
+  setTimeout(wait, 4000);
+}
+
+async function switchVenue(target: string, onRestart: () => void, onErr: (m: string) => void) {
+  const warn = target === "demo"
+    ? "Switch to BYBIT DEMO: orders go to your Demo Trading account (demo money, mainnet market)."
+    : "Switch to BYBIT TESTNET: orders go to your testnet account.";
+  if (!confirm(`${warn}\n\nThe service restarts (~15 s), a new run starts and AUTO-TRADE switches off.`)) return;
+  try {
+    await post("/api/config", { venue: target });
+    onRestart();
+    waitForRestart(onErr);
+  } catch (e: any) {
+    onErr(e.message);
+  }
+}
+
 function KeysModal() {
   const [k, setK] = useState<any>(null);
   const [kMsg, setKMsg] = useState<Msg>(null);
@@ -135,6 +166,9 @@ function KeysModal() {
   const [busy, setBusy] = useState<string | null>(null);
   const kairosKey = useRef<HTMLInputElement>(null), kairosUrl = useRef<HTMLInputElement>(null);
   const bybitKey = useRef<HTMLInputElement>(null), bybitSecret = useRef<HTMLInputElement>(null);
+  const venue = useVenue();
+  const [bv, setBv] = useState<string>(venue.name);
+  const kv = k?.bybit_venues?.[bv];
   const load = () => api("/api/keys").then((x) => { setK(x); if (x.bybit.error) setBMsg({ ok: false, text: x.bybit.error }); });
   useEffect(() => { load().catch(() => {}); }, []);
   const run = async (id: string, fn: () => Promise<void>) => { setBusy(id); try { await fn(); } finally { setBusy(null); } };
@@ -146,7 +180,7 @@ function KeysModal() {
   return (
     <Dialog className="keys">
       <div className="ph"><span className="code">KEYS</span>API credentials</div>
-      <p>Saved to <code>.env</code> in the project folder (gitignored, owner-only permissions), applied immediately. Keys are never sent back to the browser; only the last 4 characters are shown.</p>
+      <p>Saved to <code>.env</code> {k?.storage === "app" ? "in this app's private data folder (File › Open Data Folder)" : "in the project folder (gitignored"}{k?.storage === "app" ? ", owner-only permissions" : ", owner-only permissions)"}, applied immediately. Keys are never sent back to the browser; only the last 4 characters are shown.</p>
       <section className="keybox">
         <div className="keyhead"><b>KAIROS · MINARA CLOUD</b>{k && (k.kairos.set ? <Stat ok txt={`SET ${k.kairos.hint}`} /> : <Stat ok={false} txt="NOT SET" />)}</div>
         <p>Create a key at <a href="https://minara.cloud" target="_blank" rel="noopener noreferrer">minara.cloud</a> in a <b>Kairos-enabled group</b>.</p>
@@ -181,18 +215,34 @@ function KeysModal() {
         <div className={`keymsg ${jMsg ? (jMsg.ok ? "ok" : "bad") : ""}`}>{jMsg?.text}</div>
       </section>
       <section className="keybox">
-        <div className="keyhead"><b>BYBIT · TESTNET</b>{k && (k.bybit.api_key.set ? <Stat ok={k.bybit.connected} txt={`KEY ${k.bybit.api_key.hint} · ${k.bybit.connected ? "CONNECTED" : "ERROR"}`} /> : <Stat ok={false} txt="NOT SET" />)}</div>
-        <p>Create at <a href="https://testnet.bybit.com/app/user/api-management" target="_blank" rel="noopener noreferrer">testnet.bybit.com → API management</a>. Permissions: <b>Contract → Orders + Positions</b>. Leave <b>withdrawals off</b>. Mainnet keys are rejected.</p>
-        <label>API KEY<input ref={bybitKey} type="password" autoComplete="off" spellCheck={false} placeholder="testnet API key" /></label>
-        <label>API SECRET<input ref={bybitSecret} type="password" autoComplete="off" spellCheck={false} placeholder="testnet API secret" /></label>
+        <div className="keyhead"><b>BYBIT</b>
+          <span className="seg" data-tip="Which account these key fields edit. Keys are stored per venue, so switching never asks for them again.">
+            {["demo", "testnet"].map((v) => <button key={v} type="button" className={bv === v ? "on" : ""} onClick={() => { setBv(v); setBMsg(null); }}>
+              {v.toUpperCase()}{k?.bybit_venues?.[v]?.active ? " · ACTIVE" : ""}</button>)}
+          </span>
+          {kv && (kv.api_key.set ? <Stat ok={kv.active ? !!k.bybit.connected : true} txt={`KEY ${kv.api_key.hint}${kv.active ? ` · ${k.bybit.connected ? "CONNECTED" : "ERROR"}` : " · SAVED"}`} /> : <Stat ok={false} txt="NOT SET" />)}
+        </div>
+        {bv === "demo"
+          ? <p>On <a href={kv?.keys_url || "https://www.bybit.com/app/user/api-management"} target="_blank" rel="noopener noreferrer">bybit.com</a>, switch to <b>Demo Trading</b> first (avatar menu), then avatar → <b>API</b>. Permissions: <b>Contract → Orders + Positions</b>. Leave <b>withdrawals off</b>. Testnet keys and normal mainnet keys are rejected. Orders use demo funds on the real mainnet market; fills, fees and funding are re-booked at real-market cost.</p>
+          : <p>Create at <a href={kv?.keys_url || "https://testnet.bybit.com/app/user/api-management"} target="_blank" rel="noopener noreferrer">testnet.bybit.com → API management</a>. Permissions: <b>Contract → Orders + Positions</b>. Leave <b>withdrawals off</b>. Mainnet keys are rejected.</p>}
+        <label>API KEY<input ref={bybitKey} type="password" autoComplete="off" spellCheck={false} placeholder={`${bv} API key`} /></label>
+        <label>API SECRET<input ref={bybitSecret} type="password" autoComplete="off" spellCheck={false} placeholder={`${bv} API secret`} /></label>
         <div className="keyactions">
           <button className="kbtn amber" type="button" disabled={!!busy} onClick={() => run("bs", async () => {
             const key = bybitKey.current!.value.trim(), secret = bybitSecret.current!.value.trim();
             if (!key || !secret) return setBMsg({ ok: false, text: "Both key and secret are required" });
-            try { const r = await post("/api/keys/bybit", { api_key: key, api_secret: secret }); bybitKey.current!.value = bybitSecret.current!.value = ""; setBMsg({ ok: true, text: `Saved · testnet equity ${fx(r.equity)} USDT` }); } catch (e: any) { setBMsg({ ok: false, text: e.message }); }
+            try {
+              const r = await post("/api/keys/bybit", { api_key: key, api_secret: secret, venue: bv });
+              bybitKey.current!.value = bybitSecret.current!.value = "";
+              setBMsg({ ok: true, text: `Saved · ${bv} equity ${fx(r.equity)} USDT${r.active ? " · now trading on this account (observe-only)" : " · stored for when you switch to " + bv}` });
+            } catch (e: any) { setBMsg({ ok: false, text: e.message }); }
             load(); loadOverview();
           })}>{busy === "bs" ? "WORKING…" : "VERIFY & SAVE"}</button>
-          <span className="muted">Checked against your testnet wallet before saving. Auto-trade switches off.</span>
+          {kv && !kv.active && <button className="kbtn" type="button" disabled={!!busy || !kv.api_key.set}
+            data-tip={kv.api_key.set ? "Restart on this venue (new run, auto-trade off)" : "Save keys for this venue first"}
+            onClick={() => switchVenue(bv, () => setBMsg({ ok: true, text: `Restarting on ${bv}… reconnecting` }), (m) => setBMsg({ ok: false, text: m }))}>
+            USE {bv.toUpperCase()}</button>}
+          <span className="muted">Checked against your {bv} wallet before saving. Saving keys for the active venue switches auto-trade off.</span>
         </div>
         <div className={`keymsg ${bMsg ? (bMsg.ok ? "ok" : "bad") : ""}`}>{bMsg?.text}</div>
       </section>
@@ -202,6 +252,7 @@ function KeysModal() {
 
 /* ---------------------------------------------------------------- symbol universe */
 function UniverseModal() {
+  const venue = useVenue();
   const [u, setU] = useState<any>(null);
   const [sel, setSel] = useState<string[]>([]);
   const [q, setQ] = useState("");
@@ -228,17 +279,7 @@ function UniverseModal() {
       await post("/api/symbols", { symbols: sel, raise_budget: raise });
       setRestarting(true);
       // the service re-executes itself; wait for it to come back, then reload so every panel rebinds
-      const t0 = Date.now();
-      const wait = async () => {
-        try {
-          await api("/api/overview");
-          location.reload();
-        } catch {
-          if (Date.now() - t0 < 90_000) setTimeout(wait, 1500);
-          else setErr("service did not come back within 90 s");
-        }
-      };
-      setTimeout(wait, 4000);
+      waitForRestart(setErr);
     } catch (e: any) {
       setErr(e.message);
       setBusy(false);
@@ -246,8 +287,8 @@ function UniverseModal() {
   };
   return (
     <Dialog>
-      <div className="ph"><span className="code">UNIV</span>Symbol universe · signals Bybit mainnet · orders Bybit testnet</div>
-      <p>Pick the perps the bot watches and trades. Each needs ~{u ? fx(u.rph_per_symbol, 1) : "—"} model requests/hour at the current {u?.decision_tf}m trading timeframe (one per bar close, plus consistency probes). Only perps listed on both mainnet and testnet can be chosen. Entries take only testnet liquidity within {u?.max_entry_slip_bp}bp of the best price, so a thin testnet book means small or unfilled orders.</p>
+      <div className="ph"><span className="code">UNIV</span>Symbol universe · signals Bybit mainnet · orders {venue.label.replace("BYBIT", "Bybit").toLowerCase().replace("bybit", "Bybit")}</div>
+      <p>Pick the perps the bot watches and trades. Each needs ~{u ? fx(u.rph_per_symbol, 1) : "—"} model requests/hour at the current {u?.decision_tf}m trading timeframe (one per bar close, plus consistency probes). Only perps listed on both mainnet and {venue.name} can be chosen. Entries take only {venue.demo ? "mainnet" : "testnet"} liquidity within {u?.max_entry_slip_bp}bp of the best price, so a thin book means small or unfilled orders.</p>
       <div className="unibar">
         <input type="text" placeholder="filter or type a symbol" value={q} onChange={(e) => setQ(e.target.value)} />
         <span>SELECTED <b className="amb">{sel.length}</b>/{u?.max_symbols ?? 30}</span>
@@ -262,10 +303,10 @@ function UniverseModal() {
           <button className="kbtn" onClick={() => !sel.includes(typedSym) && setSel([...sel, typedSym])}>ADD {typedSym} (validated on apply)</button>
         </div>
       )}
-      {!u ? <div className="empty">{err || "Loading the universe and testnet books…"}</div> : (
+      {!u ? <div className="empty">{err || `Loading the universe and ${venue.name} books…`}</div> : (
         <div className="unigrid">
           <table className="t">
-            <thead><tr><th /><th>Symbol</th><th className="r">24h turnover $</th><th className="r">24h</th><th>Testnet</th><th className="r">Testnet bid / ask ≤20bp $</th><th className="r">Spread bp</th><th>Note</th></tr></thead>
+            <thead><tr><th /><th>Symbol</th><th className="r">24h turnover $</th><th className="r">24h</th><th>{venue.demo ? "Demo" : "Testnet"}</th><th className="r">{venue.demo ? "Mainnet" : "Testnet"} bid / ask ≤20bp $</th><th className="r">Spread bp</th><th>Note</th></tr></thead>
             <tbody>
               {rows.map((c: any) => {
                 const on = sel.includes(c.symbol), b = c.testnet_book;
@@ -365,6 +406,91 @@ function StrategyModal() {
       {msg && <div className="warnbox">{msg}</div>}
       <div className="keyactions" style={{ margin: "8px 10px" }}>
         <button className="kbtn amber" disabled={!changed.length} onClick={apply}>APPLY {changed.length ? `(${changed.length})` : ""}</button>
+        <button className="kbtn" onClick={() => setDraft(cur)}>RESET</button>
+        <button className="kbtn" onClick={() => setState({ modal: null })}>CLOSE</button>
+      </div>
+    </Dialog>
+  );
+}
+
+/* ---------------------------------------------------------------- config (every other setting) */
+type CfgField = { k: string; env: string; kind: "float" | "int" | "bool" | "choice"; min: number | null; max: number | null;
+  group: string; label: string; help: string; choices: string[] | null; restart: boolean };
+
+function ConfigModal() {
+  const [meta, setMeta] = useState<CfgField[] | null>(null);
+  const [cur, setCur] = useState<Record<string, any>>({});
+  const [draft, setDraft] = useState<Record<string, any>>({});
+  const [msg, setMsg] = useState<Msg>(null);
+  const [q, setQ] = useState("");
+  const [restarting, setRestarting] = useState(false);
+  const [keys, setKeys] = useState<any>(null);
+  const load = () => api("/api/config").then((r: any) => { setMeta(r.fields); setCur(r.values); setDraft(r.values); });
+  useEffect(() => {
+    load().catch((e) => setMsg({ ok: false, text: e.message }));
+    api("/api/keys").then(setKeys).catch(() => {});
+  }, []);
+  if (restarting) return <Dialog className="keys"><div className="restarting">RESTARTING ON THE NEW VENUE · reconnecting…</div>{msg && <div className="warnbox">{msg.text}</div>}</Dialog>;
+  if (!meta) return <Dialog className="keys"><div className="ph"><span className="code">CONFIG</span>Settings</div><p>{msg?.text || "Loading…"}</p></Dialog>;
+  const changed = meta.filter((f) => draft[f.k] !== cur[f.k]);
+  const venueChange = changed.find((f) => f.restart);
+  const shown = meta.filter((f) => !q || `${f.label} ${f.group} ${f.env} ${f.help}`.toLowerCase().includes(q.toLowerCase()));
+  const groups = [...new Set(shown.map((f) => f.group))];
+  const apply = async () => {
+    const body: Record<string, any> = {};
+    changed.forEach((f) => (body[f.k] = draft[f.k]));
+    if (venueChange && !confirm(`Switch venue to ${String(draft.venue).toUpperCase()}? The service restarts (~15 s), a new run starts and AUTO-TRADE switches off.`)) return;
+    try {
+      const r: any = await post("/api/config", body);
+      if (r.restarting) {
+        setRestarting(true);
+        waitForRestart((m) => setMsg({ ok: false, text: m }));
+        return;
+      }
+      setCur(r.values); setDraft(r.values);
+      setMsg({ ok: true, text: r.unchanged ? "Nothing changed." : `Saved ${changed.length} setting${changed.length > 1 ? "s" : ""}. Applies to new entries and the next decision.` });
+      loadOverview();
+    } catch (e: any) {
+      setMsg({ ok: false, text: e.message });
+    }
+  };
+  const input = (f: CfgField) => {
+    const v = draft[f.k];
+    if (f.kind === "bool") return <button type="button" className={`kbtn ${v ? "amber" : ""}`} onClick={() => setDraft({ ...draft, [f.k]: !v })}>{v ? "ON" : "OFF"}</button>;
+    if (f.kind === "choice") return (
+      <span className="seg">{f.choices!.map((c) => {
+        const noKeys = f.k === "venue" && c !== cur.venue && keys && !keys.bybit_venues?.[c]?.api_key?.set;
+        return <button key={c} type="button" className={v === c ? "on" : ""} disabled={!!noKeys}
+          data-tip={noKeys ? `No ${c} keys saved yet: add them in KEYS first` : undefined}
+          onClick={() => setDraft({ ...draft, [f.k]: c })}>{c.toUpperCase()}</button>;
+      })}</span>
+    );
+    return <input type="number" step={f.kind === "int" ? 1 : "any"} min={f.min ?? undefined} max={f.max ?? undefined} value={v ?? ""}
+      onChange={(e) => setDraft({ ...draft, [f.k]: e.target.value === "" ? "" : Number(e.target.value) })} />;
+  };
+  return (
+    <Dialog className="keys strat">
+      <div className="ph"><span className="code">CONFIG</span>Settings · saved to .env, applied at once (venue restarts the service)</div>
+      <div className="unibar">
+        <input type="text" placeholder="filter settings" value={q} onChange={(e) => setQ(e.target.value)} />
+        <span className="muted">Strategy (brackets, entries, triggers) is in STRATEGY · symbols in UNIV · keys in KEYS · trade timeframe and model in the bar below.</span>
+      </div>
+      <table className="t" style={{ marginTop: 6 }}>
+        {groups.map((g) => (
+          <tbody key={g}>
+            <tr><td colSpan={3} className="ph sub"><span className="code">{g.toUpperCase()}</span></td></tr>
+            {shown.filter((f) => f.group === g).map((f) => (
+              <tr key={f.k} className={changed.includes(f) ? "sel" : ""}>
+                <td className="amb" data-tip={f.env}>{f.label}</td><td>{input(f)}</td>
+                <td className="wrap muted">{f.help}{f.min !== null && f.max !== null ? ` (${f.min}–${f.max})` : ""}</td>
+              </tr>
+            ))}
+          </tbody>
+        ))}
+      </table>
+      {msg && <div className={msg.ok ? "keymsg ok" : "warnbox"}>{msg.text}</div>}
+      <div className="keyactions" style={{ margin: "8px 10px" }}>
+        <button className="kbtn amber" disabled={!changed.length} onClick={apply}>{venueChange ? "APPLY & RESTART" : "APPLY"} {changed.length ? `(${changed.length})` : ""}</button>
         <button className="kbtn" onClick={() => setDraft(cur)}>RESET</button>
         <button className="kbtn" onClick={() => setState({ modal: null })}>CLOSE</button>
       </div>
