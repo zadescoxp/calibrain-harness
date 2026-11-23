@@ -1,7 +1,8 @@
-"""Bybit TESTNET public ticker stream (bid/ask/last of the book we actually trade on).
+"""Public ticker stream of the venue's book (bid/ask/last of the book we actually trade on).
 
-Signals come from mainnet, but every order fills on the testnet book, which can sit 100+ bp away
-from mainnet and is far thinner. Managed stops are triggered from this stream's bid (long) or ask
+On testnet, signals come from mainnet but every order fills on the testnet book, which can sit
+100+ bp away from mainnet and is far thinner. On Demo Trading the venue book is mainnet itself,
+so this is the mainnet ticker stream. (The store field keeps its historical name testnet_ticker.) Managed stops are triggered from this stream's bid (long) or ask
 (short), i.e. the price we could actually exit at, within milliseconds of it moving.
 """
 
@@ -17,14 +18,15 @@ import aiohttp
 
 from .store import MarketStore
 
-TESTNET_PUBLIC_WS = "wss://stream-testnet.bybit.com/v5/public/linear"
+TESTNET_PUBLIC_WS = "wss://stream-testnet.bybit.com/v5/public/linear"  # default; the engine passes the venue's
 log = logging.getLogger("ctb.testnet_ws")
 
 OnTick = Callable[[str, dict], Awaitable[None]]
 
 
 class TestnetTickerStream:
-    def __init__(self, store: MarketStore, session: aiohttp.ClientSession, symbols: list[str]):
+    def __init__(self, store: MarketStore, session: aiohttp.ClientSession, symbols: list[str], url: str = TESTNET_PUBLIC_WS):
+        self.url = url
         self.store = store
         self.session = session
         self.symbols = symbols
@@ -40,7 +42,7 @@ class TestnetTickerStream:
         backoff = 1.0
         while not self._stop:
             try:
-                async with self.session.ws_connect(TESTNET_PUBLIC_WS, heartbeat=None) as ws:
+                async with self.session.ws_connect(self.url, heartbeat=None) as ws:
                     args = [f"tickers.{s}" for s in self.symbols]
                     for i in range(0, len(args), 10):  # Bybit accepts at most 10 args per subscribe
                         await ws.send_json({"op": "subscribe", "args": args[i:i + 10]})
