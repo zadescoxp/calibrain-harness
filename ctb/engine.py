@@ -13,7 +13,7 @@ from typing import Any
 import aiohttp
 
 from .broker.bybit_private_ws import BybitPrivateStream
-from .broker.bybit_rest import BybitTestnet
+from .broker.bybit_rest import BybitClient
 from .analytics import MarketModels
 from .broker.executor import Executor
 from . import runs as runs_mod
@@ -21,7 +21,7 @@ from .calibration import Calibrator
 from .costs import CostModel
 from .ensemble import symmetrize
 from .evaluation import validation
-from .config import Settings, save_env
+from .config import Settings, bybit_env_names, save_env
 from .db import DB
 from .evaluation.labeler import Labeler
 from .features import build_state, mirror_state
@@ -76,13 +76,13 @@ class Engine:
     # ------------------------------------------------------------------ lifecycle
     async def start(self) -> None:
         self.session = aiohttp.ClientSession()
-        self.feed = BybitPublicFeed(self.store, self.session)
+        self.feed = BybitPublicFeed(self.store, self.session, self.s.venue_spec.public_rest)
         self.context = ContextFeed(self.store, self.session)
         self.kairos = self._model_client()  # the active classification model (attribute name kept for history)
         self.labeler = Labeler(self.db, self.session, self.emit)
         self._build_members()
         self.feed.on_bar_close.append(self.on_bar_close)
-        self.testnet_stream = TestnetTickerStream(self.store, self.session, self.s.symbols)
+        self.testnet_stream = TestnetTickerStream(self.store, self.session, self.s.symbols, self.s.venue_spec.public_ws)
         self.testnet_stream.on_tick.append(self._on_testnet_tick)
         self.context.on_news.append(self.on_news)
         # the hourly budget must survive restarts, so seed it from what was actually sent
@@ -114,7 +114,7 @@ class Engine:
                                          f"trading={'on' if self.s.trading_enabled else 'observe-only'}")
 
     async def _start_executor(self) -> None:
-        self.executor = Executor(self.s, self.db, BybitTestnet(self.s.bybit_api_key, self.s.bybit_api_secret, self.session), self.emit)
+        self.executor = Executor(self.s, self.db, BybitClient(self.s.bybit_api_key, self.s.bybit_api_secret, self.session, self.s.venue), self.emit)
         try:
             await self.executor.start()
             for sym, inst in self.executor.instruments.items():
@@ -127,7 +127,8 @@ class Engine:
         if old:
             old.stop()
             self._private_task.cancel()
-        self._private_stream = BybitPrivateStream(self.s.bybit_api_key, self.s.bybit_api_secret, self.session, self.executor.on_private)
+        self._private_stream = BybitPrivateStream(self.s.bybit_api_key, self.s.bybit_api_secret, self.session, self.executor.on_private,
+                                                  self.s.venue)
         self.executor.stream = self._private_stream
         self.executor.run_id_fn = lambda: self.run["id"]
         self.executor.price_fn = lambda sym: self.store[sym].testnet_ticker
@@ -140,23 +141,30 @@ class Engine:
         self._private_task = asyncio.create_task(self._private_stream.run(), name="private_ws")
 
     # ------------------------------------------------------------------ keys (set from the dashboard)
-    async def set_bybit_keys(self, api_key: str, api_secret: str) -> dict[str, Any]:
-        """Validate testnet keys against the account, then persist and hot-swap the executor."""
-        if self.db.one("SELECT id FROM trades WHERE status IN ('open','opening') LIMIT 1"):
+    async def set_bybit_keys(self, api_key: str, api_secret: str, venue: str | None = None) -> dict[str, Any]:
+        """Validate keys against that venue's account and persist them. Keys for the ACTIVE venue also
+        hot-swap the executor; keys for the other venue are just stored, ready for a venue switch."""
+        venue = (venue or self.s.venue).strip().lower()
+        active = venue == self.s.venue
+        if active and self.db.one("SELECT id FROM trades WHERE status IN ('open','opening') LIMIT 1"):
             raise ValueError("the bot has open trades on the current account; close them (or use the kill switch) before switching keys")
-        probe = BybitTestnet(api_key, api_secret, self.session)
+        probe = BybitClient(api_key, api_secret, self.session, venue)
         await probe.sync_time()
         wallet = await probe.wallet()  # raises BybitError on bad key / wrong environment (10003)
         await probe.positions()  # needs Contract read permission
+        key_env, secret_env = bybit_env_names(venue)
+        save_env({key_env: api_key, secret_env: api_secret})
+        self.s.bybit_keys[venue] = (api_key, api_secret)
+        if not active:
+            self.emit("event", self.db.event("info", "keys", f"Bybit {venue} keys saved (used when the venue is switched to {venue})"))
+            return {"ok": True, "equity": wallet.get("equity"), "venue": venue, "active": False}
         old_task = getattr(self, "_reconcile_task", None)
         if old_task:
             old_task.cancel()
-        save_env({"BYBIT_API_KEY": api_key, "BYBIT_API_SECRET": api_secret})
-        self.s.bybit_api_key, self.s.bybit_api_secret = api_key, api_secret
         self.s.trading_enabled = False  # new account starts observe-only
         await self._start_executor()
-        self.emit("event", self.db.event("warn", "keys", "Bybit testnet keys updated from dashboard; trading set to observe-only"))
-        return {"ok": True, "equity": wallet.get("equity")}
+        self.emit("event", self.db.event("warn", "keys", f"Bybit {self.s.venue} keys updated from dashboard; trading set to observe-only"))
+        return {"ok": True, "equity": wallet.get("equity"), "venue": venue, "active": True}
 
     async def set_kairos_key(self, api_key: str, base_url: str | None = None) -> dict[str, Any]:
         updates = {"KAIROS_API_KEY": api_key}
