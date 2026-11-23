@@ -579,6 +579,17 @@ def make_app(engine: Engine) -> web.Application:
             engine.subscribers.discard(q)
         return resp
 
+    @routes.get("/api/market-map")
+    async def market_map(req: web.Request) -> web.Response:
+        """Mainnet USDT perps by 24h turnover for the market map: top n (default 200), or every one with n=0."""
+        try:
+            n = max(0, min(int(req.query.get("n", "200")), 2000))
+        except ValueError:
+            n = 200
+        ctx = engine.store.context
+        uni = ctx.get("universe_map") or ctx.get("universe", [])
+        return j({"universe": uni[:n] if n else uni, "total": len(uni), "ts": ctx.get("universe_ts")})
+
     # ---------------------------------------------------------------- symbol universe
     @routes.get("/api/universe")
     async def universe(_: web.Request) -> web.Response:
