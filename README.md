@@ -20,6 +20,7 @@
 </p>
 
 <p align="center">
+  <a href="https://zadescoxp.github.io/calibrain-harness/"><b>Website</b></a> ·
   <a href="#download"><b>Download</b></a> ·
   <a href="#quick-start"><b>Run from source</b></a> ·
   <a href="#using-the-terminal"><b>Using the terminal</b></a> ·
@@ -29,7 +30,7 @@
 </p>
 
 > [!WARNING]
-> **Paper money only.** Orders go to **Bybit Demo Trading** or the **Bybit Testnet**; both hosts are
+> **Demo accounts only.** Orders go to **Bybit Demo Trading** or the **Bybit Testnet**; both hosts are
 > hard-coded and there is no real-money venue or switch. The project is under active development, so
 > interfaces and defaults change between releases. Nothing here is financial advice.
 
@@ -129,7 +130,7 @@ while the bot is flat), so results never mix two models.
 - **Evaluation built in.** Brier/RPS skill vs climatology and vs the base rates the model was shown,
   AUC, reliability diagrams, PIT, EV ranking, repeat and mirror consistency probes, execution
   quality, and per-run results (Run 1, Run 2, …, Overall).
-- **Safety.** Paper-money hosts only (Bybit Demo / Testnet), keys only in `.env`, kill switch, daily loss limit, per-trade,
+- **Safety.** Demo and testnet hosts only (Bybit Demo / Testnet), keys only in `.env`, kill switch, daily loss limit, per-trade,
   portfolio and same-direction risk caps, venue-divergence gate.
 
 ## Quick start
@@ -569,7 +570,7 @@ imbalance, branching ratio, excitation against the fitted baseline), `order_book
 ## Safety
 
 - Signed requests go only to `api-testnet.bybit.com` or `api-demo.bybit.com` (allowlist in
-  `ctb/broker/venue.py`). Both are paper money; there is no real-money venue and no env flag for one.
+  `ctb/broker/venue.py`). Both run on demo funds; there is no live-funds venue and no env flag for one.
 - Keys are read from `.env` only (owner-only permissions, gitignored; in the desktop app, the per-user data folder). They are never logged,
   stored in the database or sent to the browser, which only sees the last four characters.
 - The server binds to 127.0.0.1 and refuses cross-origin writes.
