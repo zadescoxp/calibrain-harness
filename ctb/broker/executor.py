@@ -1,5 +1,9 @@
-"""Testnet perpetual execution: entries with server-side TP/SL, verification, time-stops,
-reconciliation, kill switch and daily loss limit.
+"""Perpetual execution on a paper venue (Bybit testnet or Demo Trading): entries with server-side
+TP/SL, verification, time-stops, reconciliation, kill switch and daily loss limit.
+
+On Demo Trading (simulated fills on the mainnet market) every trade is also booked through the
+cost-realism layer (realism.py): the worse of Bybit's fill/fees and the real mainnet book walk /
+fee schedule, plus funding. "Testnet" in names below means "the order venue".
 
 Invariants:
 - Entries are IOC limit orders capped at a few bp past the best testnet price. They take only the
@@ -25,7 +29,8 @@ from typing import Any, Callable
 
 from ..config import Settings
 from ..db import DB
-from .bybit_rest import BybitError, BybitTestnet
+from . import realism
+from .bybit_rest import BybitClient, BybitError
 
 log = logging.getLogger("ctb.exec")
 
@@ -120,7 +125,7 @@ def reason_from_orders(orders: list[dict[str, Any] | None]) -> str | None:
 
 
 class Executor:
-    def __init__(self, s: Settings, db: DB, client: BybitTestnet, emit: Callable[[str, dict], None]):
+    def __init__(self, s: Settings, db: DB, client: BybitClient, emit: Callable[[str, dict], None]):
         self.s = s
         self.db = db
         self.client = client
@@ -138,6 +143,7 @@ class Executor:
         self.halted_reason: str | None = None
         self.last_sync = 0.0
         self.sync_error: str | None = None
+        self._exit_snap: dict[str, dict[str, Any]] = {}  # symbol -> book walk when the bot sent its exit
         self.stream = None  # BybitPrivateStream, attached by the engine
         self.price_fn: Callable[[str], dict[str, Any]] | None = None  # testnet ticker, attached by the engine
         self._managed: dict[str, dict[str, Any]] = {}  # symbol -> open managed trade (stop watch)
@@ -269,7 +275,7 @@ class Executor:
                 book = await self.client.orderbook(symbol, 50)
                 levels = book["asks"] if buy else book["bids"]
                 if not levels or not book["bids"] or not book["asks"]:
-                    return {"ok": False, "reason": "testnet book is empty"}
+                    return {"ok": False, "reason": f"{self.s.venue} book is empty"}
                 ref = levels[0][0]  # best price we can take right now
                 post_px = (book["bids"] if buy else book["asks"])[0][0]  # maker: rest on our own side of the book
                 mid = (book["bids"][0][0] + book["asks"][0][0]) / 2
@@ -298,7 +304,7 @@ class Executor:
                     if risk_qty < qty_raw and risk_qty <= depth:
                         why = f"open stop-risk {open_risk:.0f} USDT leaves no room under {self.s.max_open_risk_pct}% of equity"
                     elif depth < qty_raw:
-                        why = f"only {depth:g} on the testnet book within {self.s.max_entry_slip_bp:g}bp of {ref}"
+                        why = f"only {depth:g} on the {self.s.venue} book within {self.s.max_entry_slip_bp:g}bp of {ref}"
                     else:
                         why = f"size {qty} below exchange minimum"
                     return {"ok": False, "reason": why}
@@ -330,7 +336,7 @@ class Executor:
                     "status": "opening", "ev_r": ev_r, "risk_usd": qty * ref * sl_bp / 10000, "mode": mode, "notes": mode,
                     "requested_qty": qty, "ref_price": ref, "cap_price": cap, "decision_price": decision_price,
                     "book_spread_bp": round(spread_bp, 2), "planned_sl_bp": sl_bp, "planned_tp_bp": tp_bp,
-                    "exit_mode": self.s.exit_mode, "run_id": self.run_id_fn(),
+                    "exit_mode": self.s.exit_mode, "run_id": self.run_id_fn(), "venue": self.s.venue,
                 })
             try:
                 if maker:
@@ -347,6 +353,7 @@ class Executor:
                 self.emit("event", self.db.event("error", "entry_rejected", str(exc), symbol))
                 return {"ok": False, "reason": str(exc)}
 
+            t_sent = time.time()
             if maker:
                 order = await self._wait_maker(symbol, link, (res or {}).get("orderId"), self.s.maker_wait_s)
             else:
@@ -365,6 +372,14 @@ class Executor:
             if maker:
                 ref = post_px
             slip = adverse_bp(side, entry, ref, entry=True)
+            real: dict[str, Any] = {}
+            t_filled = time.time()
+            if self.s.shadow_costs and not maker:  # taker: what walking the real (mainnet) book for this size would have cost
+                    walk = realism.walk_book(levels, filled)
+                    x = realism.extra_slip(side, filled, ref, entry, walk and walk["vwap"], entry=True)
+                    real["realism_json"] = {"entry": {**x, "book": walk}}
+                    real["venue_entry_slip_bp"] = slip
+                    slip = x["slip_bp"]
             tp = _round_tick(entry * (1 + sign * tp_bp / 10000), tick)
             sl = _round_tick(entry * (1 - sign * sl_bp / 10000), tick)
             # Record the fill before touching the bracket: if the stop fires in the next second the
@@ -373,7 +388,7 @@ class Executor:
                 "status": "open", "entry_order_id": order.get("orderId"), "entry_price": entry, "qty": filled,
                 "notional": filled * entry, "entry_fee": _f(order.get("cumExecFee")), "entry_slip_bp": slip,
                 "risk_usd": filled * abs(entry - sl0), "entry_latency_ms": round((time.time() - t0) * 1000),
-                "entry_wait_ms": round((time.time() - t0) * 1000) if maker else None, "ref_price": ref,
+                "entry_wait_ms": round((time.time() - t0) * 1000) if maker else None, "ref_price": ref, **real,
             })
             if managed:
                 mark1 = await self._mark(symbol) or mark0
@@ -390,11 +405,17 @@ class Executor:
             if protection == "gone":
                 self.db.update("trades", trade_id, {"protection": "closed_before_anchor"})
                 return {"ok": True, "trade_id": trade_id, "entry": entry, "qty": filled}
+            if self.s.shadow_costs and maker:
+                # resting order: no slippage, but would a real queue have filled it? (checked after the
+                # stop is live, so the check never delays protection)
+                real["maker_fill_check"] = await realism.resting_fill_check(self.client, symbol, buy, post_px, t_sent, t_filled)
             self.db.update("trades", trade_id, {"protection": protection, "tp_price": tp_live, "sl_price": sl_live,
-                                                "risk_usd": filled * abs(entry - sl_live)})
+                                                "risk_usd": filled * abs(entry - sl_live),
+                                                **({"maker_fill_check": real["maker_fill_check"]} if real.get("maker_fill_check") else {})})
             self._refresh_managed()
             part = "" if filled >= qty - 1e-12 else f" (partial: {filled:g} of {qty:g})"
-            msg = (f"{'EXPLORE ' if exploration else ''}{'MAKER ' if maker else ''}{side.upper()} {filled:g}{part} @ {entry} | ref {ref} slip {slip:+.1f}bp "
+            chk = f" fill:{real['maker_fill_check']}" if real.get("maker_fill_check") else ""
+            msg = (f"{'EXPLORE ' if exploration else ''}{'MAKER ' if maker else ''}{side.upper()} {filled:g}{part} @ {entry} | ref {ref} slip {slip:+.1f}bp{chk} "
                    f"| risk {sizing.get('risk_pct', 0):.3f}% "
                    f"| TP {tp_live} SL {sl_live} ({protection})")
             self.emit("event", self.db.event("trade", "opened", msg, symbol))
@@ -499,6 +520,9 @@ class Executor:
             link = f"ctb-x-{reason[:6]}-{uuid.uuid4().hex[:8]}"
             book = await self.client.orderbook(symbol, 50)
             levels = book["bids"] if sell else book["asks"]
+            if steps == 1 and levels and self.s.shadow_costs:
+                walk = realism.walk_book(levels, size)
+                self._exit_snap[symbol] = {"exit_ref_px": walk["best"], "exit_model_px": walk["vwap"]}
             try:
                 if levels and bp < self.s.exit_chase_max_bp:
                     best = levels[0][0]
@@ -539,7 +563,7 @@ class Executor:
             finally:
                 self._exiting.discard(symbol)
             if t:
-                self.db.update("trades", t["id"], {"exit_steps": steps})
+                self.db.update("trades", t["id"], {"exit_steps": steps, **self._exit_snap.pop(symbol, {})})
             self.emit("event", self.db.event("trade", "close_requested", f"closing {symbol}: {reason}", symbol))
             return True
 
@@ -659,20 +683,45 @@ class Executor:
             risk = t["qty"] * entry * t["planned_sl_bp"] / 10000  # the stop moved; 1R is still the original risk
         else:
             risk = t["qty"] * abs(entry - sl) if entry and sl else t.get("risk_usd")
-        r_mult = agg["pnl"] / risk if risk else None
-        self.db.update("trades", t["id"], {
+        upd: dict[str, Any] = {
             "status": "closed", "closed_ts": agg["closed_ts"], "exit_price": agg["exit_price"], "realized_pnl": agg["pnl"],
             "fees": fees, "exit_fee": agg["close_fee"], "close_reason": reason, "exit_slip_bp": exit_slip,
-            "risk_usd": risk, "r_mult": r_mult, "exit_fills": len(agg["rows"]), "fills_json": agg["rows"],
+            "risk_usd": risk, "exit_fills": len(agg["rows"]), "fills_json": agg["rows"],
             "close_notes": None if agg["complete"] else f"exit rows cover {agg['size']:g} of {t['qty']:g}",
-        })
+        }
+        if self.s.shadow_costs:
+            upd.update(await self._realism_close(t, agg, fees, reason, exit_slip))
+        pnl = upd["realized_pnl"]
+        r_mult = upd["r_mult"] = pnl / risk if risk else None
+        self.db.update("trades", t["id"], upd)
         self._flat_since.pop(t["id"], None)
-        self.emit("event", self.db.event("trade", "closed", f"{t['side']} closed by {reason}: pnl {agg['pnl']:+.2f} USDT"
+        adj = upd.get("realism_adj_usd")
+        self.emit("event", self.db.event("trade", "closed", f"{t['side']} closed by {reason}: pnl {pnl:+.2f} USDT"
+                                         + (f" (Bybit {agg['pnl']:+.2f}, realism {-adj:+.2f})" if adj else "")
                                          + (f" ({r_mult:+.2f}R)" if r_mult is not None else "")
                                          + (f", {len(agg['rows'])} fills" if len(agg["rows"]) > 1 else "")
                                          + (f", exit slip {exit_slip:+.1f}bp" if exit_slip is not None else ""), t["symbol"]))
         self.emit("trade", {"id": t["id"]})
         return True
+
+    async def _realism_close(self, t: dict[str, Any], agg: dict[str, Any], fees: float, reason: str,
+                             exit_slip: float | None) -> dict[str, Any]:
+        """Demo Trading: re-book the close at real-market costs (see realism.py)."""
+        t = dict(t)
+        if isinstance(t.get("realism_json"), str):
+            import json
+            t["realism_json"] = json.loads(t["realism_json"] or "{}")
+        try:
+            funding = await self.client.funding_history(t["symbol"], int(t["opened_ts"] * 1000), int(agg["closed_ts"] * 1000) + 1000)
+        except Exception as exc:  # noqa: BLE001
+            funding = None
+            self.emit("event", self.db.event("warn", "funding_unavailable", f"funding not charged: {exc}", t["symbol"]))
+        out = realism.book_close(t, agg, fees, reason, self.s, funding, exit_slip)
+        if reason == "take_profit" and t.get("exit_mode") == "managed" and t.get("tp_price"):
+            fill_ts = agg["closed_ts"]
+            out["tp_fill_check"] = await realism.resting_fill_check(self.client, t["symbol"], t["side"] != "long",
+                                                                    t["tp_price"], max(t["opened_ts"], fill_ts - 120), fill_ts)
+        return out
 
     # ------------------------------------------------------------------ managed exits
     async def _arm_managed(self, trade_id: int, symbol: str, side: str, entry: float, qty: float, tp: float, sl: float,
@@ -795,4 +844,14 @@ class Executor:
             "last_sync": self.last_sync,
             "sync_error": self.sync_error,
             "private_stream": bool(self.stream and self.stream.connected),
+            "venue": self.s.venue,
+            "cost_realism": self.s.shadow_costs,
+            # booked P&L is Bybit's minus this: costs the demo venue did not charge (today, all runs)
+            "realism_adj_today": round(sum(r["a"] or 0 for r in self.db.query(
+                "SELECT realism_adj_usd a FROM trades WHERE status='closed' AND closed_ts >= ?", (self._day_start(),))), 2),
         }
+
+    @staticmethod
+    def _day_start() -> float:
+        now = datetime.now(timezone.utc)
+        return now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
