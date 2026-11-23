@@ -4,49 +4,48 @@ import { api, post } from "@/lib/api";
 import { loadOverview, selectSymbol, selectTf } from "@/lib/data";
 import { setState, useModelLabel, useStore, venueOf } from "@/lib/store";
 import { age, cssVar, dt, fx, hhmm, hhmmss, isNum, px, sg, short, TFL, ud, usd } from "@/lib/format";
-import { PerfChart, PerfLegend, PriceChart } from "./Charts";
+import { IndicatorsMenu, PerfChart, PerfLegend, PriceChart } from "./Charts";
 import { ask, setPosCap, useNow } from "./TopBar";
+import { baseOf, CoinLogo, ExpandBtn, ModelLogo, Ph, PhIcon, Seg, Sym } from "./ui";
+import { COIN_LOGOS } from "@/lib/coins";
+import { CircleCheck, CircleSlash, Minus, Radar, TrendingDown, TrendingUp } from "lucide-react";
 
-const Ph = ({ code, children, right }: { code: string; children?: React.ReactNode; right?: React.ReactNode }) => (
-  <div className="ph"><span className="code">{code}</span>{children}{right !== undefined && <span className="ph-r">{right}</span>}</div>
-);
 
 export function MonitorView({ hidden }: { hidden: boolean }) {
   return (
     <main className="view on" style={hidden ? { display: "none" } : undefined}>
       <div className="grid-mon">
         <section className="pnl a-mon">
-          <Ph code="MON" right={<><span className="live"><span className="pulse" />LIVE</span><button className="mini" onClick={() => setState({ modal: { kind: "universe" } })} data-tip="Choose which perps the bot watches and trades (UNIV)">SYMBOLS</button></>}>Perp monitor</Ph>
+          <Ph code="MON" right={<><span className="live"><span className="pulse" />live</span><button className="mini" onClick={() => setState({ modal: { kind: "universe" } })} data-tip="Choose which perps the bot watches and trades (UNIV)">Edit list</button></>}>Markets</Ph>
           <div className="pb tight scroll watch-scroll"><Watchlist /></div>
-          <div className="ph sub"><span className="code">WEI</span>Cross-asset<span className="ph-r">Yahoo · alternative.me</span></div>
-          <div className="pb tight"><Macro /></div>
+          <Ph code="WEI" sub right="Yahoo, alternative.me">Cross-asset</Ph>
+          <div className="pb tight scroll macro"><Macro /></div>
         </section>
         <section className="pnl a-chart">
           <ChartHeader />
           <PriceChart />
         </section>
         <section className="pnl a-kai">
-          <Ph code="KRS" right={<><button className="mini" onClick={() => ask(false)}>ASK</button><button className="mini" onClick={() => ask(true)} data-tip="Ask + repeat & mirror consistency probes (3 extra requests)">+PRB</button></>}><ModelName /> signal</Ph>
+          <Ph code="KRS" right={<><button className="mini" onClick={() => ask(false)} data-tip="Ask the model now (1 request)">Ask now</button><button className="mini" onClick={() => ask(true)} aria-label="Ask with consistency probes" data-tip="Ask + repeat and mirror consistency probes (3 extra requests)"><Radar size={13} strokeWidth={1.7} /></button></>}><ModelBadge /> signal</Ph>
           <div className="pb scroll"><KairosPanel /></div>
         </section>
         <section className="pnl a-acct"><Account /></section>
         <section className="pnl a-perf">
-          <div className="ph"><span className="code">COMP</span>Relative perf · 24h<PerfLegend /></div>
+          <Ph code="COMP" right={<PerfLegend />}>Relative performance, 24h</Ph>
           <PerfChart />
         </section>
         <section className="pnl a-map">
-          <Ph code="IMAP" right="size ∝ √turnover · top 40">Perp market map · 24h %</Ph>
           <MarketMap visible={!hidden} />
         </section>
         <section className="pnl a-book"><BookPanel /></section>
         <section className="pnl a-news">
-          <Ph code="TOP" right="CoinDesk · Cointelegraph · Decrypt">News</Ph>
+          <Ph code="TOP" right="CoinDesk, Cointelegraph, Decrypt">News</Ph>
           <div className="pb tight scroll"><NewsMini /></div>
         </section>
         <section className="pnl a-tape"><Tape /></section>
         <section className="pnl a-stats"><Stats /></section>
         <section className="pnl a-log">
-          <Ph code="BLTR" right="click a row for the full request / response">Decision blotter · <ModelName /></Ph>
+          <Ph code="BLTR" right="click a row for the full request and response">Decisions, <ModelName /></Ph>
           <div className="pb tight scroll"><Blotter /></div>
         </section>
       </div>
@@ -85,23 +84,23 @@ function Watchlist() {
   if (!mon) return <div className="empty">Loading…</div>;
   return (
     <table className="t">
-      <thead><tr><th>Sym</th><th className="r">Last</th><th className="r">24h</th><th>24h·15m</th><th className="r">Fund%</th><th className="r">KRS</th></tr></thead>
+      <thead><tr><th>Market</th><th className="r">Last</th><th className="r">24h</th><th className="wl-trend">Trend</th><th className="r wl-fund">Funding</th><th className="r">Signal</th></tr></thead>
       <tbody>
         {mon.rows.map((r: any) => {
           const t = ticks[r.symbol];
           const last = t?.last ?? r.last, pct = t?.pct24h ?? r.pct24h;
           const d = latest[r.symbol];
-          const tip = `${r.symbol}\nmark ${px(t?.mark ?? r.mark)} · index ${px(r.index)}\n24h H ${px(r.high24h)} L ${px(r.low24h)}\nturnover $${usd(r.turnover24h)} · OI $${usd(r.oi_value)}\ntestnet ${px(t?.testnet_last ?? r.testnet_last)} (${sg(r.divergence_bp, 1)} bp)`;
+          const tip = `${r.symbol}\nfunding ${sg(isNum(r.funding) ? r.funding * 100 : null, 4, "%")}\nmark ${px(t?.mark ?? r.mark)} · index ${px(r.index)}\n24h H ${px(r.high24h)} L ${px(r.low24h)}\nturnover $${usd(r.turnover24h)} · OI $${usd(r.oi_value)}\ntestnet ${px(t?.testnet_last ?? r.testnet_last)} (${sg(r.divergence_bp, 1)} bp)`;
           return (
             <tr key={r.symbol} className={`click ${r.symbol === symbol ? "sel" : ""}`} onClick={() => selectSymbol(r.symbol)} data-tip={tip}>
-              <td className="sym">{short(r.symbol)}</td>
+              <td className="sym"><Sym symbol={r.symbol} /></td>
               <LastCell value={last} />
               <td className={`r ${ud(pct)}`}>{sg(pct, 2, "%")}</td>
-              <td>{spark(r.spark)}</td>
-              <td className={`r ${ud(r.funding)}`}>{sg(isNum(r.funding) ? r.funding * 100 : null, 4)}</td>
+              <td className="wl-trend">{spark(r.spark)}</td>
+              <td className={`r wl-fund ${ud(r.funding)}`}>{sg(isNum(r.funding) ? r.funding * 100 : null, 4)}</td>
               <td className="r">
-                {!d ? <span className="tag flat">—</span> : d.error_kind ? <span className="tag err" data-tip={d.error_kind}>ERR</span> : (
-                  <span className={`tag ${d.action}`} data-tip={`${d.action}${d.exploration ? " (explore)" : ""} · ${age(Date.now() / 1000 - d.ts)} ago\nEV long ${sg(d.ev_long_r, 3)}R · short ${sg(d.ev_short_r, 3)}R`}>{(d.action || "").toUpperCase()}</span>
+                {!d ? <span className="tag flat">—</span> : d.error_kind ? <span className="tag err" data-tip={d.error_kind}>error</span> : (
+                  <span className={`tag ${d.action}`} data-tip={`${d.action}${d.exploration ? " (explore)" : ""}, ${age(Date.now() / 1000 - d.ts)} ago\nEV long ${sg(d.ev_long_r, 3)}R, short ${sg(d.ev_short_r, 3)}R`}>{d.action || "—"}</span>
                 )}
               </td>
             </tr>
@@ -114,16 +113,16 @@ function Watchlist() {
 
 function Macro() {
   const mon = useStore((s) => s.mon);
-  const names: Record<string, string> = { SPX_fut: "S&P 500 FUT", NDX_fut: "NASDAQ 100 FUT", DXY: "DOLLAR INDEX", Gold: "GOLD FUT", US10Y: "US 10Y YIELD", VIX: "VIX" };
+  const names: Record<string, string> = { SPX_fut: "S&P 500 futures", NDX_fut: "Nasdaq 100 futures", DXY: "Dollar index", Gold: "Gold futures", US10Y: "US 10Y yield", VIX: "VIX" };
   const fg = mon?.fear_greed;
   return (
     <table className="t">
-      <thead><tr><th>Instrument</th><th className="r">Last</th><th className="r">8h chg</th></tr></thead>
+      <thead><tr><th>Instrument</th><th className="r">Last</th><th className="r">8h</th></tr></thead>
       <tbody>
         {Object.entries<any>(mon?.macro || {}).map(([k, v]) => (
           <tr key={k}><td className="amb">{names[k] || k}</td><td className="r">{fx(v.last, k === "US10Y" ? 3 : 2)}</td><td className={`r ${ud(v.chg_8h_pct)}`}>{sg(v.chg_8h_pct, 2, "%")}</td></tr>
         ))}
-        {fg && <tr><td className="amb">CRYPTO FEAR &amp; GREED</td><td className="r">{fg.value}</td><td className="r muted">{String(fg.label).toUpperCase()} · wk {fg.week_ago}</td></tr>}
+        {fg && <tr data-tip={`Crypto fear & greed: ${fg.value} (${fg.label}); a week ago ${fg.week_ago}`}><td className="amb">Fear &amp; greed</td><td className="r">{fg.value}</td><td className="r muted">{String(fg.label).toLowerCase()}</td></tr>}
       </tbody>
     </table>
   );
@@ -140,16 +139,23 @@ function ChartHeader() {
   const pct = tick?.pct24h ?? (isNum(mkt?.ticker?.price24hPcnt) ? 100 * mkt.ticker.price24hPcnt : null);
   const tn = tick?.testnet_last ?? mkt?.testnet_ticker?.lastPrice;
   const div = tn && last ? 10000 * (Number(tn) / Number(last) - 1) : null;
+  const venueName = useStore((s) => venueOf(s.ov?.settings).demo ? "Demo" : "Testnet");
   return (
-    <div className="ph">
-      <span className="code">GP</span>
-      <span><span className="w">{symbol}</span> <span className="w">{px(last)}</span> <span className={ud(pct)}>{sg(pct, 2, "%")}</span></span>
-      <span className="seg">
-        {Object.entries(TFL).map(([k, l]) => <button key={k} className={k === tf ? "on" : ""} onClick={() => selectTf(k)}>{l}</button>)}
+    <div className="ph chart-head">
+      {symbol && <CoinLogo symbol={symbol} size={26} />}
+      <span className="ph-title" style={{ flexDirection: "column", alignItems: "flex-start", gap: 0 }}>
+        <span style={{ display: "inline-flex", gap: 10, alignItems: "baseline" }}>
+          <span className="px">{px(last)}</span><span className={ud(pct)}>{sg(pct, 2, "%")}</span>
+        </span>
+        <span className="muted" style={{ fontSize: 11.5 }}>{symbol} perpetual, Bybit mainnet price</span>
       </span>
-      <span className="legend"><i style={{ ["--c" as any]: "var(--amber)" }} />EMA20 <i style={{ ["--c" as any]: "var(--s1)" }} />EMA50 <i className="tri" /><ModelName /></span>
+      <span className="seg" role="group" aria-label="Chart timeframe">
+        {Object.entries(TFL).map(([k, l]) => <button key={k} type="button" className={k === tf ? "on" : ""} aria-pressed={k === tf} onClick={() => selectTf(k)}>{l.toLowerCase()}</button>)}
+      </span>
+      <IndicatorsMenu />
       <span className="ph-r">
-        {tn && <>TESTNET {px(tn)} <span className={div !== null && Math.abs(div) > maxDiv ? "dn" : ""} data-tip="Testnet last vs mainnet last. Entries and brackets use the testnet book.">{sg(div, 1)}bp</span></>}
+        {tn && <span data-tip="Order venue last price vs mainnet last. Entries and brackets use the venue book.">{venueName} {px(tn)} <span className={div !== null && Math.abs(div) > maxDiv ? "dn" : ""}>{sg(div, 1)} bp</span></span>}
+        <ExpandBtn />
       </span>
     </div>
   );
@@ -158,6 +164,10 @@ function ChartHeader() {
 /* ---------------------------------------------------------------- model signal */
 function ModelName() {
   return <>{useModelLabel()}</>;
+}
+function ModelBadge() {
+  const p = useStore((s) => s.ov?.settings.model_provider) || "kairos";
+  return <><ModelLogo provider={p} size={18} /><ModelName /></>;
 }
 
 function PBars({ probs, labels }: { probs: Record<string, number>; labels?: Record<string, string> }) {
@@ -177,11 +187,17 @@ function KairosPanel() {
   if (!d)
     return (
       <>
-        <div className="kv-verdict"><span className="big muted">NO SIGNAL</span><span className="why">{ov?.kairos.configured ? `${ov.kairos.label} is asked on every closed ${ov.settings.decision_tf_minutes}m bar. Type ASK to ask now.` : `Add a ${ov?.kairos.label || "model"} key (type KEYS) to start receiving signals.`}</span></div>
-        {pv && <div className="kv"><div className="k">Next bracket SL</div><div className="v">{fx(pv.meta.sl_bp / 100, 2)}%</div><div className="k">Next bracket TP</div><div className="v">{fx(pv.meta.tp_bp / 100, 2)}%</div><div className="k">Horizon</div><div className="v">{pv.meta.horizon_min} min</div></div>}
+        <div className="sig-hero">
+          <span className="sig-act flat"><Minus size={20} strokeWidth={1.8} aria-hidden="true" />Waiting</span>
+          <div className="sig-meta"><b>No signal yet</b><span className="muted">{ov?.kairos.configured ? `${ov.kairos.label} is asked on every closed ${ov.settings.decision_tf_minutes}m bar. Ask now asks straight away.` : `Add a ${ov?.kairos.label || "model"} key in Keys to start receiving signals.`}</span></div>
+        </div>
+        {!ov?.kairos.configured && <button className="btn primary" style={{ marginBottom: 12 }} onClick={() => setState({ modal: { kind: "keys" } })}>Add {ov?.kairos.label || "model"} key</button>}
+        {pv && <dl className="facts">
+          <div><dt>Next stop</dt><dd>{fx(pv.meta.sl_bp / 100, 2)}%</dd></div><div><dt>Next target</dt><dd>{fx(pv.meta.tp_bp / 100, 2)}%</dd></div><div><dt>Horizon</dt><dd>{pv.meta.horizon_min} min</dd></div>
+        </dl>}
       </>
     );
-  if (d.error_kind) return <><div className="kv-verdict"><span className="big dn">ERROR</span><span className="why">{d.error_kind}: {d.error_msg}</span></div><div className="muted">{dt(d.ts)} · recorded as a request failure, never as a &quot;no trade&quot; judgment.</div></>;
+  if (d.error_kind) return <><div className="sig-hero"><span className="sig-act dn"><CircleSlash size={20} strokeWidth={1.8} aria-hidden="true" />Error</span><div className="sig-meta"><b>{d.error_kind}</b><span className="muted">{dt(d.ts)}, recorded as a request failure, never as a &quot;no trade&quot; judgment.</span></div></div><p className="muted" style={{ margin: 0 }}>{d.error_msg}</p></>;
   const p = d.parsed || {}, sl = d.sl_bp / 100, tp = d.tp_bp / 100;
   const e = [-2, -1, -1 / 3, 1 / 3, 1, 2].map((x) => x * sl);
   const binL: Record<string, string> = {};
@@ -190,21 +206,56 @@ function KairosPanel() {
   const top = (q: string) => (p[q] ? Object.entries<number>(p[q].probs).sort((a, b) => b[1] - a[1])[0] : null);
   const reg = top("regime"), crowd = top("crowding");
   const v2 = d.p_up !== undefined && d.p_up !== null;
-  const raw = (x: any) => (isNum(x) ? <span className="muted" style={{ fontSize: 11 }}> raw {sg(x, 2)}</span> : null);
+  const reasons = String(d.reason || "").split(/;\s*/).map((r) => r.trim()).filter(Boolean);
+  const act = d.action === "long" ? "up" : d.action === "short" ? "dn" : "flat";
+  const ActIcon = d.action === "long" ? TrendingUp : d.action === "short" ? TrendingDown : Minus;
+  const ev = (k: "long" | "short") => (
+    <div className="ev-tile" data-tip={v2 ? `Calibrated EV (the model blended with this bracket's base rates).\nRaw model ${sg(d[`ev_${k}_raw_r`], 3)}R, base rates alone ${sg(d[`ev_${k}_base_r`], 3)}R` : undefined}>
+      <span className="l">EV {k}{v2 ? <span className="muted"> calibrated</span> : null}</span>
+      <span className={`n ${ud(d[`ev_${k}_r`])}`}>{sg(d[`ev_${k}_r`], 2)}R</span>
+      {v2 && isNum(d[`ev_${k}_raw_r`]) && <span className="s">raw {sg(d[`ev_${k}_raw_r`], 2)}R</span>}
+    </div>
+  );
+  const pct = (x: any) => (isNum(x) ? `${(100 * Number(x)).toFixed(0)}%` : "—");
+  const facts: [string, React.ReactNode, string?][] = v2 ? [
+    ["P(up), calibrated", <>{pct(d.p_up)} <span className="muted">raw {pct(d.p_up_raw)}</span></>, "Calibrated P(price higher at horizon); raw = model alone"],
+    ["Big move", <>{pct(d.p_big_move)} <span className="muted">base {pct(d.p_big_move_base)}</span></>, "Calibrated P(move ≥ 1 stop either way) against its base rate"],
+    ["Mean reversion", p.mean_reversion ? pct(p.mean_reversion.p) : "—"],
+    ["Model weight", fx(typeof d.weights?.long_bracket === "object" ? d.weights.long_bracket.model : d.weights?.long_bracket, 2), "w in w × model + (1 − w) × base rates"],
+    ...(d.events !== undefined ? [
+      ["Events", d.events?.length ? d.events.join(", ").replace(/_/g, " ") : "none", "Market events on the decision bar. With trade trigger = events, trades happen only on these bars."],
+      ["Regime", d.regime ? String(d.regime).replace(/_/g, " ") : "—", "GARCH volatility state × trend (efficiency ratio)"],
+      ["Order flow", <>{sg(d.flow_score, 2)} <span className="muted">side from {d.side_source || "model"}{d.symmetrized ? ", mirrored" : ""}</span></>, "Order-flow direction score in [−1, 1]"],
+    ] as [string, React.ReactNode, string?][] : []),
+    ...(d.costs ? [
+      ["Costs t / s / time", `${fx(d.costs.target_bp, 1)} / ${fx(d.costs.stop_bp, 1)} / ${fx(d.costs.time_bp, 1)} bp`, "Cost charged to each outcome: target (maker exit), stop (taker + slippage), time exit"],
+      ["Bracket", d.bracket?.mode === "vol" ? `${fx(d.bracket.sigma_horizon_bp, 0)} bp σ, ${d.bracket.cost_floor_bound ? "cost floor" : "vol"}` : "ATR", "How the stop was sized"],
+    ] as [string, React.ReactNode, string?][] : []),
+  ] : [
+    ["Regime", reg ? `${reg[0].replace("_", " ")} ${(100 * reg[1]).toFixed(0)}%` : "—"],
+    ["Crowding", crowd ? `${crowd[0].replace("_", " ")} ${(100 * crowd[1]).toFixed(0)}%` : "—"],
+    ["Mean reversion", p.mean_reversion ? pct(p.mean_reversion.p) : "—"],
+    ["Data sufficient", p.data_sufficient ? pct(p.data_sufficient.p) : "—"],
+  ];
+  facts.push(["Asked", `${hhmmss(d.ts)}, ${age(Date.now() / 1000 - d.ts)} ago`], ["Latency", `${fx(d.latency_ms, 0)} ms`],
+    ["Coherence", <>{fx(d.coherence, 2)} <span className={d.issues?.length ? "dn" : "muted"}>{d.issues?.length || 0} issues</span></>]);
   return (
     <>
-      <div className="kv-verdict">
-        <span className={`big ${d.action === "long" ? "up" : d.action === "short" ? "dn" : "muted"}`}>{(d.action || "").toUpperCase()}</span>
-        {d.exploration && <span className="tag xp" data-tip="Exploration trade: strict gates would have stayed flat">EXPLORE</span>}
-        <span className="why">{d.reason}</span>
+      <div className="sig-hero">
+        <span className={`sig-act ${act}`}><ActIcon size={20} strokeWidth={1.8} aria-hidden="true" />{d.action ? d.action[0].toUpperCase() + d.action.slice(1) : "—"}</span>
+        <div className="sig-meta">
+          <b>{d.action === "flat" ? "No trade on this bar" : `${d.action === "long" ? "Long" : "Short"} signal`}{d.exploration && <span className="tag xp" style={{ marginLeft: 8 }} data-tip="Exploration trade: strict gates would have stayed flat">explore</span>}</b>
+          <span className="muted">setup {fx(d.setup_quality, 2)} of 4, asked {age(Date.now() / 1000 - d.ts)} ago</span>
+        </div>
       </div>
-      <div className="evrow">
-        <div data-tip={v2 ? `Calibrated EV (the model blended with this bracket's base rates).\nRaw model ${sg(d.ev_long_raw_r, 3)}R · base rates alone ${sg(d.ev_long_base_r, 3)}R` : undefined}>
-          <div className="l">EV long{v2 && " · cal"}</div><div className={`n ${ud(d.ev_long_r)}`}>{sg(d.ev_long_r, 3)}R{v2 && raw(d.ev_long_raw_r)}</div></div>
-        <div data-tip={v2 ? `Calibrated EV.\nRaw model ${sg(d.ev_short_raw_r, 3)}R · base rates alone ${sg(d.ev_short_base_r, 3)}R` : undefined}>
-          <div className="l">EV short{v2 && " · cal"}</div><div className={`n ${ud(d.ev_short_r)}`}>{sg(d.ev_short_r, 3)}R{v2 && raw(d.ev_short_raw_r)}</div></div>
-        <div><div className="l">Setup 0–4</div><div className="n">{fx(d.setup_quality, 2)}</div></div>
-      </div>
+      {reasons.length > 0 && (
+        <ul className="sig-why" aria-label="Why">
+          {reasons.map((r, i) => (
+            <li key={i}>{d.action === "flat" ? <CircleSlash size={13} strokeWidth={1.8} aria-hidden="true" /> : <CircleCheck size={13} strokeWidth={1.8} aria-hidden="true" />}<span>{r}</span></li>
+          ))}
+        </ul>
+      )}
+      <div className="ev-row">{ev("long")}{ev("short")}</div>
       {(["long_bracket", "short_bracket"] as const).map((q) => p[q] && (
         <div className="qb" key={q}>
           <div className="qt"><span>{q === "long_bracket" ? "Long" : "Short"} bracket</span><span>first touch ≤ {d.horizon_min ?? ov?.settings.horizon_minutes}m</span></div>
@@ -212,39 +263,9 @@ function KairosPanel() {
         </div>
       ))}
       {p.return_distribution && <div className="qb"><div className="qt"><span>Return distribution</span><span>E = {sg(d.expected_move_in_d, 2)} × stop</span></div><PBars probs={p.return_distribution.probs} labels={binL} /></div>}
-      {v2 ? (
-        <div className="kfoot">
-          <div data-tip="Calibrated P(price higher at horizon); raw = model alone"><b>P(up) cal · raw</b>{(100 * d.p_up).toFixed(0)}% · {isNum(d.p_up_raw) ? (100 * d.p_up_raw).toFixed(0) + "%" : "—"}</div>
-          <div data-tip="Calibrated P(price moves ≥ 1 stop either way within the horizon)"><b>Big move</b>{isNum(d.p_big_move) ? (100 * d.p_big_move).toFixed(0) + "%" : "—"}</div>
-          <div><b>Mean rev · w(model)</b>{p.mean_reversion ? (100 * p.mean_reversion.p).toFixed(0) + "%" : "—"} · {fx(typeof d.weights?.long_bracket === "object" ? d.weights.long_bracket.model : d.weights?.long_bracket, 2)}</div>
-        </div>
-      ) : null}
-      {v2 && d.events !== undefined ? (
-        <div className="kfoot">
-          <div data-tip="Market events on the decision bar. With TRADE TRIGGER = events, trades happen only on these bars."><b>Events</b>{d.events?.length ? d.events.join(", ").replace(/_/g, " ") : "none"}</div>
-          <div data-tip="GARCH volatility state x trend (efficiency ratio)"><b>Regime</b>{d.regime || "—"}</div>
-          <div data-tip={`Order-flow direction score in [-1, 1]; side chosen from ${d.side_source || "model"}${d.symmetrized ? "; answers averaged with the mirrored market" : ""}`}><b>Flow · side from</b>{sg(d.flow_score, 2)} · {d.side_source || "model"}{d.symmetrized ? " · sym" : ""}</div>
-        </div>
-      ) : null}
-      {v2 && d.costs ? (
-        <div className="kfoot">
-          <div data-tip="Cost charged to each outcome: target (maker exit), stop (taker + slippage), time exit"><b>Cost t · s · time</b>{fx(d.costs.target_bp, 1)} · {fx(d.costs.stop_bp, 1)} · {fx(d.costs.time_bp, 1)}bp</div>
-          <div data-tip="How the stop was sized"><b>Bracket</b>{d.bracket?.mode === "vol" ? `${fx(d.bracket.sigma_horizon_bp, 0)}bp σ · ${d.bracket.cost_floor_bound ? "cost floor" : "vol"}` : "ATR"}</div>
-          <div data-tip="Calibrated P(move ≥ 1 stop) against its base rate"><b>Move vs base</b>{isNum(d.p_big_move) ? (100 * d.p_big_move).toFixed(0) : "—"}% · {isNum(d.p_big_move_base) ? (100 * d.p_big_move_base).toFixed(0) : "—"}%</div>
-        </div>
-      ) : null}
-      {!v2 && (
-        <div className="kfoot">
-          <div><b>Regime</b>{reg ? `${reg[0].replace("_", " ")} ${(100 * reg[1]).toFixed(0)}%` : "—"}</div>
-          <div><b>Crowding</b>{crowd ? `${crowd[0].replace("_", " ")} ${(100 * crowd[1]).toFixed(0)}%` : "—"}</div>
-          <div><b>Mean rev · data ok</b>{p.mean_reversion ? (100 * p.mean_reversion.p).toFixed(0) + "%" : "—"} · {p.data_sufficient ? (100 * p.data_sufficient.p).toFixed(0) + "%" : "—"}</div>
-        </div>
-      )}
-      <div className="kfoot">
-        <div><b>Asked</b>{hhmmss(d.ts)} ({age(Date.now() / 1000 - d.ts)} ago)</div>
-        <div><b>Latency</b>{fx(d.latency_ms, 0)} ms</div>
-        <div><b>Coherence · issues</b>{fx(d.coherence, 2)} · <span className={d.issues?.length ? "dn" : ""}>{d.issues?.length || 0}</span></div>
-      </div>
+      <dl className="facts">
+        {facts.map(([k, v, tip]) => <div key={k} data-tip={tip}><dt>{k}</dt><dd>{v}</dd></div>)}
+      </dl>
     </>
   );
 }
@@ -261,39 +282,42 @@ function Account() {
     }
   };
   const vn = venueOf(ov?.settings);
-  if (!a) return <><Ph code="PRTU">Account · {vn.name}</Ph><div className="empty">{ov?.executor_error || `No ${vn.name} keys`}</div></>;
+  const title = <span data-tip={vn.realism ? "Equity is shown as Bybit reports it; trade P&L is re-booked at real-market cost" : undefined}>{vn.demo ? "Demo" : "Testnet"} account</span>;
+  if (!a) return <><Ph code="PRTU">{title}</Ph><div className="empty">{ov?.executor_error || `No Bybit ${vn.name} keys yet.`} <button className="mini" onClick={() => setState({ modal: { kind: "keys" } })}>Add keys</button></div></>;
   const st = ov.settings;
   const cells: [string, React.ReactNode, string][] = [
-    ["Equity", fx(w.equity), "USDT · UTA"], ["Available", fx(w.available), "USDT"],
+    ["Equity", fx(w.equity), "USDT, unified account"], ["Available", fx(w.available), "USDT"],
     ["Unrealised", <span key="u" className={ud(w.unrealized_pnl)}>{sg(w.unrealized_pnl)}</span>, "USDT"],
-    ["Today PnL", <span key="d" className={ud(a.daily_pnl)}>{sg(a.daily_pnl)}</span>,
-      a.cost_realism ? `booked · realism −${fx(a.realism_adj_today ?? 0)} · halts −${st.daily_loss_limit_pct}%` : `halts at −${st.daily_loss_limit_pct}%`],
-    ["Positions", <span key="p">{a.positions.length}/{st.max_positions} <button className="mini" onClick={() => setPosCap()} data-tip="Change the max number of open positions. Applies to new entries only.">CAP</button></span>, `${a.open_orders} open orders`],
-    ["Risk / trade", `${st.exploration_mode ? Math.min(st.explore_risk_pct, st.risk_per_trade_pct) : st.risk_per_trade_pct}%`, `entry cap ${st.max_entry_slip_bp}bp · ≤${st.max_leverage}x`],
+    ["Today P&L", <span key="d" className={ud(a.daily_pnl)}>{sg(a.daily_pnl)}</span>,
+      a.cost_realism ? `booked, realism −${fx(a.realism_adj_today ?? 0)}, halts at −${st.daily_loss_limit_pct}%` : `halts at −${st.daily_loss_limit_pct}%`],
+    ["Positions", <span key="p">{a.positions.length}/{st.max_positions} <button className="mini" onClick={() => setPosCap()} data-tip="Change the max number of open positions. Applies to new entries only.">Cap</button></span>, `${a.open_orders} open orders`],
+    ["Risk per trade", `${st.exploration_mode ? Math.min(st.explore_risk_pct, st.risk_per_trade_pct) : st.risk_per_trade_pct}%`, `entry cap ${st.max_entry_slip_bp} bp, up to ${st.max_leverage}× leverage`],
   ];
   return (
     <>
-      <Ph code="PRTU" right={a.last_sync ? `${a.private_stream ? "stream" : "poll"} · sync ${age(now / 1000 - a.last_sync)} ago` : ""}>Account · {vn.name}{vn.realism ? " · equity as Bybit reports" : ""}</Ph>
-      <div className="pb tight" style={{ flex: "none" }}>
-        <div className="acct-grid">{cells.map(([l, n, s]) => <div className="cell" key={l}><div className="l">{l}</div><div className="n">{n}</div><div className="s">{s}</div></div>)}</div>
-      </div>
-      <div className="ph sub"><span className="code">PST</span>Positions</div>
-      <div className="pb tight scroll">
+      <Ph code="PRTU" right={a.last_sync ? `${a.private_stream ? "streaming" : "polling"}, synced ${age(now / 1000 - a.last_sync)} ago` : ""}>{title}</Ph>
+      <div className="pb tight scroll acct-body">
+        <div className="acct-grid">{cells.map(([l, n, s]) => <div className="cell" key={l} data-tip={`${l}: ${s}`}><div className="l">{l}</div><div className="n">{n}</div><div className="s">{s}</div></div>)}</div>
+        <div className="pos-head"><PhIcon code="PST" /><span>Positions</span><span className="muted">{a.positions.length ? `${a.positions.length} open` : ""}</span></div>
         {a.positions.length ? (
-          <table className="t">
-            <thead><tr><th>Sym</th><th>Side</th><th className="r">Size</th><th className="r">Entry</th><th className="r">Mark</th><th className="r">uPnL</th><th className="r">SL</th><th className="r">TP</th><th /></tr></thead>
-            <tbody>
-              {a.positions.map((x: any) => (
-                <tr key={x.symbol}>
-                  <td className="sym">{short(x.symbol)}</td><td><span className={`tag ${x.side}`}>{x.side.toUpperCase()}</span></td>
-                  <td className="r">{x.size}</td><td className="r">{x.entry}</td><td className="r">{x.mark}</td>
-                  <td className={`r ${ud(x.upnl)}`}>{sg(x.upnl)}</td><td className="r">{x.sl || <span className="dn">NONE</span>}</td><td className="r">{x.tp || "—"}</td>
-                  <td><button className="mini" onClick={() => closePos(x.symbol)}>CLOSE</button></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        ) : <div className="empty">FLAT · no open positions</div>}
+          <ul className="pos-list">
+            {a.positions.map((x: any) => (
+              <li key={x.symbol} className="pos">
+                <div className="pos-l1">
+                  <Sym symbol={x.symbol} size={18} />
+                  <span className={`tag ${x.side}`}>{x.side}</span>
+                  <span className="pos-sz muted">{x.size}</span>
+                  <b className={`pos-pnl ${ud(x.upnl)}`}>{sg(x.upnl)}</b>
+                  <button className="mini" onClick={() => closePos(x.symbol)} aria-label={`Close ${short(x.symbol)}`}>Close</button>
+                </div>
+                <div className="pos-l2">
+                  <span><i>entry</i> {x.entry}</span><span><i>mark</i> {x.mark}</span>
+                  <span><i>stop</i> {x.sl || <b className="dn">none</b>}</span><span><i>target</i> {x.tp || "—"}</span>
+                </div>
+              </li>
+            ))}
+          </ul>
+        ) : <div className="empty">No open positions</div>}
       </div>
     </>
   );
@@ -334,34 +358,84 @@ function squarify(items: any[], x: number, y: number, w: number, h: number): Nod
 }
 function heat(p: number) {
   // diverging: red ← neutral grey → green, saturates at ±6%; the signed % label carries the value
-  const t = Math.min(Math.abs(p) / 6, 1), n = [38, 38, 38], g = [22, 150, 88], r = [196, 52, 52], c = p >= 0 ? g : r;
+  const t = Math.min(Math.abs(p) / 6, 1), n = [36, 38, 43], g = [34, 150, 106], r = [190, 68, 72], c = p >= 0 ? g : r;
   return `rgb(${n.map((v, i) => Math.round(v + (c[i] - v) * Math.pow(t, 0.75))).join(",")})`;
 }
+type MapSize = "40" | "100" | "200" | "0";
+const MAP_SIZES: { v: MapSize; label: string }[] = [{ v: "40", label: "40" }, { v: "100", label: "100" }, { v: "200", label: "200" }, { v: "0", label: "All" }];
+
+/** Treemap of mainnet USDT perps: area ∝ √(24h turnover), colour = 24h change, coin logo on every tile that has room.
+ * The panel shows the top 40; expanded it shows the top 200, and the selector goes up to every listed perp. */
 function MarketMap({ visible }: { visible: boolean }) {
   const host = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
-  const universe: any[] = useStore((s) => s.mon?.universe) || [];
+  const [pick, setPick] = useState<MapSize | null>(null); // null = follow the panel (40 small, 200 expanded)
+  const [expanded, setExpandedState] = useState(false);
+  const [big, setBig] = useState<{ n: MapSize; rows: any[]; total: number } | null>(null);
+  const [noEndpoint, setNoEndpoint] = useState(false);
+  const small: any[] = useStore((s) => s.mon?.universe) || [];
   const tracked: string[] = useStore((s) => s.ov?.settings.symbols) || [];
+  const n: MapSize = pick ?? (expanded ? "200" : "40");
+
   useEffect(() => {
+    const el = host.current!;
     const ro = new ResizeObserver(([e]) => setSize({ w: e.contentRect.width, h: e.contentRect.height }));
-    ro.observe(host.current!);
-    return () => ro.disconnect();
+    ro.observe(el);
+    const pnl = el.closest(".pnl");
+    const mo = new MutationObserver(() => setExpandedState(!!pnl?.classList.contains("expanded")));
+    if (pnl) mo.observe(pnl, { attributes: true, attributeFilter: ["class"] });
+    return () => { ro.disconnect(); mo.disconnect(); };
   }, []);
+
+  // more than the 40 the monitor poll carries: ask the engine for the bigger list, refreshed every 10 s while shown
+  useEffect(() => {
+    if (n === "40" || !visible) return;
+    let stop = false;
+    const load = () => api(`/api/market-map?n=${n}`)
+      .then((r: any) => { if (!stop) { setBig({ n, rows: r.universe, total: r.total }); setNoEndpoint(false); } })
+      .catch(() => { if (!stop) setNoEndpoint(true); });
+    load();
+    const id = setInterval(() => { if (!document.hidden) load(); }, 10_000);
+    return () => { stop = true; clearInterval(id); };
+  }, [n, visible]);
+
+  const universe = n !== "40" && big?.n === n ? big.rows : small;
   const rects = useMemo(() => (size.w && size.h ? squarify(universe.map((x) => ({ ...x, value: Math.sqrt(x.turnover24h) })), 0, 0, size.w, size.h) : []), [universe, size]);
+  const title = expanded ? `Market map, 24h${universe.length ? `, top ${universe.length}` : ""}${big?.total && n !== "40" && big.n === n ? ` of ${big.total}` : ""}` : "Market map";
   return (
-    <div className="pb map-wrap" ref={host}>
-      {!universe.length ? <div className="empty">Loading universe…</div> : visible && (
-        <svg viewBox={`0 0 ${size.w} ${size.h}`}>
-          {rects.map((r) => (
-            <g key={r.symbol} data-tip={`${r.symbol} · ${px(r.last)}\n24h ${sg(r.pct24h, 2, "%")}\nturnover $${usd(r.turnover24h)} · OI $${usd(r.oi_value)}\nfunding ${sg(r.funding * 100, 4, "%")}`}>
-              <rect className={tracked.includes(r.symbol) ? "trk" : ""} x={r.x} y={r.y} width={Math.max(r.w, 0)} height={Math.max(r.h, 0)} fill={heat(r.pct24h)} />
-              {r.w > 34 && r.h > 15 && <text x={r.x + 4} y={r.y + 13}>{short(r.symbol)}</text>}
-              {r.w > 46 && r.h > 28 && <text className="p" x={r.x + 4} y={r.y + 26}>{sg(r.pct24h, 2, "%")}</text>}
-            </g>
-          ))}
-        </svg>
-      )}
-    </div>
+    <>
+      <Ph code="IMAP" right={<Seg label="How many markets" value={n} onChange={(v) => setPick(v)}
+        options={MAP_SIZES.map((o) => ({ ...o, tip: o.v === "0" ? "Every USDT perpetual on Bybit" : `Top ${o.label} by 24h turnover` }))} />}>
+        <span data-tip="Bybit mainnet USDT perpetuals by 24h turnover. Tile size ∝ √turnover, colour = 24h change; outlined tiles are the markets the bot trades.">{title}</span>
+      </Ph>
+      <div className="pb map-wrap" ref={host}>
+        {noEndpoint && n !== "40" && <div className="map-note">This engine only sends the top 40. Restart it to see larger maps.</div>}
+        {!universe.length ? <div className="empty">Loading markets…</div> : visible && (
+          <svg viewBox={`0 0 ${size.w} ${size.h}`}>
+            {rects.map((r) => {
+              const base = baseOf(r.symbol);
+              const room = Math.min(r.w, r.h);
+              const ls = room >= 44 && r.w >= 52 ? Math.round(Math.min(34, Math.max(14, room * 0.2))) : 0; // logo size, 0 = no room
+              const ty = r.y + 8 + (ls ? ls + 13 : 9);
+              const mine = tracked.includes(r.symbol);
+              return (
+                <g key={r.symbol} data-tip={`${r.symbol} · ${px(r.last)}\n24h ${sg(r.pct24h, 2, "%")}\nturnover $${usd(r.turnover24h)} · OI $${usd(r.oi_value)}\nfunding ${sg(r.funding * 100, 4, "%")}`}
+                  onClick={() => { if (mine) selectSymbol(r.symbol); }} style={mine ? { cursor: "pointer" } : undefined}>
+                  <rect className={mine ? "trk" : ""} x={r.x} y={r.y} width={Math.max(r.w, 0)} height={Math.max(r.h, 0)} rx={room > 24 ? 7 : 3} fill={heat(r.pct24h)} />
+                  {ls > 0 && (COIN_LOGOS[base]
+                    ? <image href={`/${COIN_LOGOS[base]}`} x={r.x + 8} y={r.y + 8} width={ls} height={ls} />
+                    : <g><circle cx={r.x + 8 + ls / 2} cy={r.y + 8 + ls / 2} r={ls / 2} fill="rgba(0,0,0,.28)" />
+                        <text className="mono" x={r.x + 8 + ls / 2} y={r.y + 8 + ls / 2 + ls * 0.16} textAnchor="middle" style={{ fontSize: ls * 0.42 }}>{base.slice(0, 2)}</text></g>)}
+                  {r.w > 34 && r.h > (ls ? ls + 22 : 15) && <text x={r.x + 8} y={ty}>{short(r.symbol)}</text>}
+                  {r.w > 46 && r.h > (ls ? ls + 36 : 30) && <text className="p" x={r.x + 8} y={ty + 14}>{sg(r.pct24h, 2, "%")}</text>}
+                  {r.w > 90 && r.h > (ls ? ls + 52 : 46) && <text className="p" x={r.x + 8} y={ty + 28}>${usd(r.turnover24h)}</text>}
+                </g>
+              );
+            })}
+          </svg>
+        )}
+      </div>
+    </>
   );
 }
 
@@ -395,7 +469,7 @@ function DepthChart({ bids, asks, d }: { bids: [number, number][]; asks: [number
       <path d={bidLine} fill="none" stroke="var(--up)" strokeWidth={1.5} />
       <path d={close(askLine, aPts[aPts.length - 1].p)} fill="var(--down)" fillOpacity={0.14} />
       <path d={askLine} fill="none" stroke="var(--down)" strokeWidth={1.5} />
-      <line x1={x(mid)} x2={x(mid)} y1={2} y2={H - 12} stroke="var(--amber-dim)" strokeDasharray="2 2" />
+      <line x1={x(mid)} x2={x(mid)} y1={2} y2={H - 12} stroke="var(--muted)" strokeDasharray="2 3" />
       {bPts.map((pt) => <rect key={"b" + pt.p} x={x(pt.p) - 3} y={0} width={6} height={H - 12} fill="transparent" data-tip={`≥ ${fx(pt.p, d)}: $${usd(pt.c)} bid`} />)}
       {aPts.map((pt) => <rect key={"a" + pt.p} x={x(pt.p) - 3} y={0} width={6} height={H - 12} fill="transparent" data-tip={`≤ ${fx(pt.p, d)}: $${usd(pt.c)} ask`} />)}
       <text x={PAD} y={H - 2} className="dl">{fx(mid - span, d)}</text>
@@ -412,7 +486,7 @@ function BookPanel() {
   const now = useNow(500);
   const b = book && book.symbol === symbol ? book : mkt?.symbol === symbol ? mkt?.book : null;
   const d = Math.max(String(mkt?.ticker?.lastPrice ?? "").split(".")[1]?.length || 0, 0);
-  const head = <Ph code="DOM" right={book?.ts ? `push ${age((now - book.ts) / 1000)} ago` : ""}>Order book · mainnet</Ph>;
+  const head = <Ph code="DOM" right={book?.ts ? <span data-tip="Last push from Bybit">{age((now - book.ts) / 1000)}</span> : ""}>Order book</Ph>;
   if (!b?.bids?.length || !b?.asks?.length) return <>{head}<div className="empty">Book loading…</div></>;
   const bids = b.bids as [number, number][], asks = b.asks as [number, number][];
   const bb = bids[0][0], ba = asks[0][0], mid = (bb + ba) / 2, spr = (10000 * (ba - bb)) / mid;
@@ -429,7 +503,7 @@ function BookPanel() {
       <tr className={side} data-tip={`${side === "ask" ? "Ask" : "Bid"} ${fx(r.p, d)} · ${r.q.toLocaleString("en-US", { maximumFractionDigits: 4 })} · $${usd(r.n)}\n${(((r.p - mid) / mid) * 1e4).toFixed(1)} bp from mid · cumulative $${usd(r.c)}`}>
         <td className={side === "ask" ? "dn" : "up"}>{fx(r.p, d)}</td>
         <td className="r">{r.q.toLocaleString("en-US", { maximumFractionDigits: 4 })}</td>
-        <td className="r lvl">{wall && <span className="wall">WALL</span>}{usd(r.n)}<span className="bar" style={{ width: `${((100 * r.n) / maxLvl).toFixed(1)}%` }} /></td>
+        <td className="r lvl">{wall && <span className="wall">wall</span>}{usd(r.n)}<span className="bar" style={{ width: `${((100 * r.n) / maxLvl).toFixed(1)}%` }} /></td>
         <td className="r muted">{usd(r.c)}</td>
       </tr>
     );
@@ -440,16 +514,16 @@ function BookPanel() {
       <div className="pb tight scroll ladder">
         <DepthChart bids={bids} asks={asks} d={d} />
         <div className="imb" data-tip={`All ${bids.length + asks.length} pushed levels: bids $${usd(allBid)} vs asks $${usd(allAsk)}`}>
-          <span className="up">BID ${usd(allBid)}</span>
+          <span className="up">bid ${usd(allBid)}</span>
           <span className="imb-bar"><span style={{ width: `${(50 + 50 * imb).toFixed(1)}%` }} /></span>
-          <span className="dn">${usd(allAsk)} ASK</span>
+          <span className="dn">${usd(allAsk)} ask</span>
           <span className="muted">{sg(imb * 100, 0, "%")}</span>
         </div>
         <table className="t">
           <thead><tr><th>Price</th><th className="r">Size</th><th className="r">Level $</th><th className="r">Cum $</th></tr></thead>
           <tbody>
             {[...askRows].reverse().map((r) => <Row key={"a" + r.p} side="ask" r={r} />)}
-            <tr className="mid"><td colSpan={4}>SPREAD {fx(ba - bb, d)} · {fx(spr, 2)} bp · MID {fx(mid, d + 1)}</td></tr>
+            <tr className="mid"><td colSpan={4}>spread {fx(ba - bb, d)} ({fx(spr, 2)} bp), mid {fx(mid, d + 1)}</td></tr>
             {bidRows.map((r) => <Row key={"b" + r.p} side="bid" r={r} />)}
           </tbody>
         </table>
@@ -490,16 +564,16 @@ function Tape() {
   const t: any[] = useStore((s) => s.mon?.tape) || [];
   return (
     <>
-      <Ph code="ALRT" right={`${t.length} events`}>Liquidations &amp; block prints</Ph>
+      <Ph code="ALRT" right={`${t.length} events`}>Liquidations and block prints</Ph>
       <div className="pb tight scroll">
         {t.length ? (
           <table className="t">
-            <thead><tr><th>Time</th><th>Sym</th><th>Type</th><th>Side</th><th className="r">Notional $</th><th className="r">Price</th></tr></thead>
+            <thead><tr><th>Time</th><th>Market</th><th>Type</th><th>Side</th><th className="r">Notional $</th><th className="r">Price</th></tr></thead>
             <tbody>
               {t.map((e, i) => {
                 const bull = e.side === "BUY" || e.side === "SHORT"; // a short liquidation is forced buying
                 return (
-                  <tr key={i}><td className="muted">{hhmmss(e.ts)}</td><td className="sym">{short(e.symbol)}</td>
+                  <tr key={i}><td className="muted">{hhmmss(e.ts)}</td><td className="sym"><Sym symbol={e.symbol} size={14} /></td>
                     <td>{e.kind === "LIQ" ? <span className="tag amb">LIQ</span> : <span className="tag flat">BLOCK</span>}</td>
                     <td className={bull ? "up" : "dn"}>{e.kind === "LIQ" ? `${e.side} LIQ` : e.side}</td><td className="r">{usd(e.notional)}</td><td className="r muted">{e.price ? px(e.price) : ""}</td></tr>
                 );
@@ -522,7 +596,7 @@ export { KV };
 function Stats() {
   const m = useStore((s) => s.mkt);
   const showState = () => m?.state_preview && setState({ modal: { kind: "state", data: { symbol: m.symbol, preview: m.state_preview } } });
-  if (!m) return <><Ph code="DES">Derivatives &amp; flow</Ph><div className="empty">Loading…</div></>;
+  if (!m) return <><Ph code="DES">Derivatives and flow</Ph><div className="empty">Loading…</div></>;
   const t = m.ticker, st = m.state_preview?.state || {}, dv = st.derivatives || {}, ob = st.order_book || {}, of = st.order_flow || {};
   const fr = isNum(t.fundingRate) ? 100 * t.fundingRate : null;
   const collecting = <span className="muted">collecting…</span>;
@@ -533,22 +607,22 @@ function Stats() {
   const n = m.state_preview ? JSON.stringify(m.state_preview.state).length : 0;
   return (
     <>
-      <Ph code="DES" right={n ? <a href="#" onClick={(e) => { e.preventDefault(); showState(); }}>KAIROS STATE ≈{Math.round(n / 3.6)} TOK ›</a> : ""}>{m.symbol} · derivatives, flow &amp; trend</Ph>
+      <Ph code="DES" right={n ? <button className="mini" onClick={showState}>Model input, ≈{Math.round(n / 3.6)} tokens</button> : ""}><Sym symbol={m.symbol} size={16} /> derivatives, flow and trend</Ph>
       <div className="pb tight scroll">
         <div className="kvcols">
-          <div><div className="colh">DERIVATIVES</div><KV rows={[
+          <div><div className="colh">Derivatives</div><KV rows={[
             ["Funding 8h", <span key="f" className={ud(fr)}>{sg(fr, 4, "%")}</span>, "Positive: longs pay shorts"], ["Annualised", sg(isNum(fr) ? fr * 3 * 365 : null, 1, "%")],
             ["Mark − index", sg(dv.mark_minus_index_bp, 2, " bp")], ["Open interest", "$" + usd(Number(t.openInterestValue))],
             ["OI Δ 1h / 4h", <span key="oi"><span className={ud(dv.open_interest_change_1h_pct)}>{sg(dv.open_interest_change_1h_pct, 2, "%")}</span> / <span className={ud(dv.open_interest_change_4h_pct)}>{sg(dv.open_interest_change_4h_pct, 2, "%")}</span></span>],
             ["Accounts long", isNum(dv.accounts_long_share) ? `${fx(100 * dv.accounts_long_share, 1)}% (${sg(100 * (dv.accounts_long_share_change_1h || 0), 1)} 1h)` : "—"],
           ]} /></div>
-          <div><div className="colh">TAKER FLOW &amp; LIQUIDATIONS</div><KV rows={[
+          <div><div className="colh">Taker flow and liquidations</div><KV rows={[
             flow(of.last_5m, "Net taker 5m"), flow(of.last_15m, "Net taker 15m"), flow(of.last_60m, "Net taker 60m"),
             ["Liq L/S 15m", liq(dv.long_liquidations_15m_usd, dv.short_liquidations_15m_usd), "Long liquidations (forced selling) / short liquidations (forced buying)"],
             ["Liq L/S 60m", liq(dv.long_liquidations_60m_usd, dv.short_liquidations_60m_usd)],
             ["Stream coverage", `${of.stream_coverage_minutes ?? "—"} min`],
           ]} /></div>
-          <div><div className="colh">BOOK · VOLATILITY · CONTEXT</div><KV rows={[
+          <div><div className="colh">Book, volatility, context</div><KV rows={[
             ["Spread", ob.available === false ? "stale" : `${fx(ob.spread_bp, 2)} bp`],
             ["Depth ≤10bp B/A", ob.available === false ? "—" : `${usd(ob.bid_depth_within_10bp_usd)} / ${usd(ob.ask_depth_within_10bp_usd)}`],
             ["24h range pos", isNum(st.range_position_24h_0_to_1) ? fx(st.range_position_24h_0_to_1, 2) : "—", "0 = at 24h low, 1 = at high; outside 0..1 = breakout"],
@@ -561,7 +635,7 @@ function Stats() {
           <thead><tr><th>TF</th><th className="r">Ret 12b %</th><th className="r">vs EMA20</th><th className="r">vs EMA50</th><th className="r">vs EMA200</th><th className="r">RSI14</th><th className="r">ADX14</th><th className="r">+DI − −DI</th><th className="r">ATR %</th><th className="r">BB pos</th><th className="r">Vol ×</th></tr></thead>
           <tbody>
             {Object.entries<any>(st.trend_by_timeframe || {}).map(([tf, b]) => (
-              <tr key={tf}><td className="amb">{tf.toUpperCase()}</td>
+              <tr key={tf}><td className="amb">{tf}</td>
                 <td className={`r ${ud(b.return_last_12_bars_pct)}`}>{sg(b.return_last_12_bars_pct, 2)}</td><td className={`r ${ud(b.price_vs_ema20_pct)}`}>{sg(b.price_vs_ema20_pct, 2)}</td>
                 <td className={`r ${ud(b.price_vs_ema50_pct)}`}>{sg(b.price_vs_ema50_pct, 2)}</td><td className={`r ${ud(b.price_vs_ema200_pct)}`}>{sg(b.price_vs_ema200_pct, 2)}</td>
                 <td className="r">{fx(b.rsi14, 1)}</td><td className="r">{fx(b.adx14, 1)}</td><td className={`r ${ud(b.di_plus_minus_di)}`}>{sg(b.di_plus_minus_di, 1)}</td>
@@ -587,18 +661,18 @@ function Blotter() {
   if (!rows.length) return <div className="empty">No model decisions yet</div>;
   return (
     <table className="t">
-      <thead><tr><th>Time</th><th>Sym</th><th>Signal</th><th className="r">Price</th><th className="r">EV long</th><th className="r">EV short</th><th className="r">Setup</th><th className="r">SL/TP %</th><th className="r">ms</th><th>Outcome (labelled)</th><th>Reason / gates</th></tr></thead>
+      <thead><tr><th>Time</th><th>Market</th><th>Signal</th><th className="r">Price</th><th className="r">EV long</th><th className="r">EV short</th><th className="r">Setup</th><th className="r">SL/TP %</th><th className="r">ms</th><th>Outcome (labelled)</th><th>Reason / gates</th></tr></thead>
       <tbody>
         {rows.map((d) => {
           const l = d.label;
           return (
             <tr key={d.id} className={`click ${d.symbol === symbol ? "sel" : ""}`} onClick={() => openDecision(d.id)}>
-              <td className="muted">{dt(d.ts)}</td><td className="sym">{short(d.symbol)}</td>
-              <td>{d.error_kind ? <span className="tag err">{d.error_kind}</span> : <><span className={`tag ${d.action}`}>{(d.action || "").toUpperCase()}</span>{d.exploration && <> <span className="tag xp">XP</span></>}{d.probe && <> <span className="tag flat">{d.probe}</span></>}</>}</td>
+              <td className="muted">{dt(d.ts)}</td><td className="sym"><Sym symbol={d.symbol} size={14} /></td>
+              <td>{d.error_kind ? <span className="tag err">{d.error_kind}</span> : <><span className={`tag ${d.action}`}>{d.action || "—"}</span>{d.exploration && <> <span className="tag xp">explore</span></>}{d.probe && <> <span className="tag flat">{d.probe}</span></>}</>}</td>
               <td className="r">{isNum(d.price) ? String(d.price) : "—"}</td>
               <td className={`r ${ud(d.ev_long_r)}`}>{sg(d.ev_long_r, 3)}</td><td className={`r ${ud(d.ev_short_r)}`}>{sg(d.ev_short_r, 3)}</td>
               <td className="r">{fx(d.setup_quality, 2)}</td><td className="r">{fx(d.sl_bp / 100, 2)}/{fx(d.tp_bp / 100, 2)}</td><td className="r">{fx(d.latency_ms, 0)}</td>
-              <td>{l && !l.unlabelable ? <>L {l.long.outcome.replace("_first", "").toUpperCase()} · S {l.short.outcome.replace("_first", "").toUpperCase()} · <span className={ud(l.return_pct)}>{sg(l.return_pct, 2, "%")}</span></> : <span className="muted">pending · scored after {horizon}m</span>}</td>
+              <td>{l && !l.unlabelable ? <>L {l.long.outcome.replace("_first", "").toUpperCase()} · S {l.short.outcome.replace("_first", "").toUpperCase()} · <span className={ud(l.return_pct)}>{sg(l.return_pct, 2, "%")}</span></> : <span className="muted">pending, scored after {horizon}m</span>}</td>
               <td className="muted wrap">{d.reason || d.error_msg || ""}</td>
             </tr>
           );
