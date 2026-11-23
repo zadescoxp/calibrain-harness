@@ -30,7 +30,7 @@ async def main(dry_run: bool) -> None:
     s = load_settings()
     db = DB(s.db_path)
     async with aiohttp.ClientSession() as session:
-        client = BybitTestnet(s.bybit_api_key, s.bybit_api_secret, session)
+        client = BybitTestnet(s.bybit_api_key, s.bybit_api_secret, session, s.venue)
         await client.sync_time()
         ex = Executor(s, db, client, lambda *_: None)
         before = {t["id"]: t for t in db.query("SELECT * FROM trades")}
