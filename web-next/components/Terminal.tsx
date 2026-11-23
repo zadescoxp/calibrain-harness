@@ -2,12 +2,13 @@
 import { useEffect } from "react";
 import { connectSocket, loadDecisions, loadMarket, loadMonitor, loadNews, loadOverview, loadPerf } from "@/lib/data";
 import { setState, useStore } from "@/lib/store";
-import { Alerts, Clocks, CommandBar, FKeys, StatusLine } from "./TopBar";
+import { Alerts, AppHeader, ControlBar, StatusLine } from "./TopBar";
 import { MonitorView } from "./Monitor";
 import { EvalView, LogView, NewsView, TradesView } from "./Views";
 import { Modals } from "./Modals";
 import { ValidationView } from "./Validation";
 import { Tip } from "./Tip";
+import { setExpanded } from "./ui";
 
 /** Polls only what has no push channel; everything that moves arrives over /ws. */
 function every(ms: number, fn: () => Promise<unknown>) {
@@ -37,6 +38,10 @@ export default function Terminal() {
       ];
     })();
     const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && document.querySelector(".pnl.expanded") && !document.querySelector("dialog[open]")) {
+        setExpanded(null);
+        return;
+      }
       const fk = ({ F1: "mon", F2: "eval", F3: "trades", F4: "news", F5: "log", F6: "valid" } as const)[e.key as "F1"];
       if (fk) {
         e.preventDefault();
@@ -58,9 +63,8 @@ export default function Terminal() {
 
   return (
     <>
-      <Clocks />
-      <CommandBar />
-      <FKeys />
+      <AppHeader />
+      <ControlBar />
       <Alerts />
       {ready ? (
         <>
@@ -72,8 +76,9 @@ export default function Terminal() {
           {view === "log" && <LogView />}
         </>
       ) : (
-        <div className="empty">Connecting to the local terminal service on 127.0.0.1:8800…</div>
+        <div className="empty">Connecting to the harness engine…</div>
       )}
+      <div className="expand-backdrop" onClick={() => setExpanded(null)} aria-hidden="true" />
       <StatusLine />
       <Modals />
       <Tip />
