@@ -34,7 +34,8 @@ UNIVERSE_SIZE = 100  # top USDT perps by 24h turnover offered in the symbol pick
 
 
 class BybitPublicFeed:
-    def __init__(self, store: MarketStore, session: aiohttp.ClientSession):
+    def __init__(self, store: MarketStore, session: aiohttp.ClientSession, venue_rest: str = TESTNET_REST):
+        self.venue_rest = venue_rest  # where the order venue's tickers come from (mainnet on Demo Trading)
         self.store = store
         self.session = session
         self.on_bar_close: list[BarCloseCallback] = []
@@ -96,7 +97,7 @@ class BybitPublicFeed:
         tick = 0
         while not self._stop.is_set():
             try:
-                res = await self._get(TESTNET_REST, "/v5/market/tickers", {"category": "linear"})
+                res = await self._get(self.venue_rest, "/v5/market/tickers", {"category": "linear"})
                 by_sym = {r["symbol"]: r for r in res["list"]}
                 for s in self.store.symbols:
                     if s in by_sym:
