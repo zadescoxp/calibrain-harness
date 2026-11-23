@@ -11,30 +11,84 @@
 </p>
 
 <p align="center">
-  <img alt="status: under development" src="https://img.shields.io/badge/status-under%20development-ff9a2e?style=flat-square">
-  <img alt="venue: Bybit testnet only" src="https://img.shields.io/badge/venue-Bybit%20testnet%20only-3a3a3a?style=flat-square">
+  <a href="https://github.com/zadescoxp/calibrain-harness/releases/latest"><img alt="latest release" src="https://img.shields.io/github/v/release/zadescoxp/calibrain-harness?style=flat-square&color=ff8a1f&label=release"></a>
+  <a href="https://github.com/zadescoxp/calibrain-harness/releases"><img alt="downloads" src="https://img.shields.io/github/downloads/zadescoxp/calibrain-harness/total?style=flat-square&color=3a3a3a"></a>
+  <img alt="platforms: macOS | Windows" src="https://img.shields.io/badge/desktop-macOS%20%7C%20Windows-3a3a3a?style=flat-square">
+  <img alt="venues: Bybit Demo | Testnet" src="https://img.shields.io/badge/venues-Bybit%20Demo%20%7C%20Testnet-3a3a3a?style=flat-square">
   <img alt="models: Kairos | Jev" src="https://img.shields.io/badge/models-Kairos%20%7C%20Jev-3a3a3a?style=flat-square">
-  <img alt="python 3.12" src="https://img.shields.io/badge/python-3.12-3a3a3a?style=flat-square">
-  <img alt="next.js 16" src="https://img.shields.io/badge/next.js-16-3a3a3a?style=flat-square">
   <a href="LICENSE"><img alt="license: MIT" src="https://img.shields.io/badge/license-MIT-3a3a3a?style=flat-square"></a>
 </p>
 
+<p align="center">
+  <a href="#download"><b>Download</b></a> ·
+  <a href="#quick-start"><b>Run from source</b></a> ·
+  <a href="#using-the-terminal"><b>Using the terminal</b></a> ·
+  <a href="#how-it-works"><b>How it works</b></a> ·
+  <a href="#evaluation"><b>Evaluation</b></a> ·
+  <a href="#safety"><b>Safety</b></a>
+</p>
+
 > [!WARNING]
-> **Calibrain Harness is under active development.** It trades on the **Bybit testnet only** (the host is
-> hard-coded; there is no mainnet switch). Interfaces, question sets and defaults change between
-> commits. Nothing here is financial advice.
+> **Paper money only.** Orders go to **Bybit Demo Trading** or the **Bybit Testnet**; both hosts are
+> hard-coded and there is no real-money venue or switch. The project is under active development, so
+> interfaces and defaults change between releases. Nothing here is financial advice.
 
 <p align="center">
   <a href="docs/media/calibrain-harness-demo.mp4"><img alt="Calibrain Harness terminal demo (click for the full video)" src="docs/media/calibrain-harness-demo.gif" width="880"></a>
   <br><sub>Live terminal: monitor, Kairos signals, evaluation and news. <a href="docs/media/calibrain-harness-demo.mp4">Watch the full 1-minute video</a>.</sub>
 </p>
 
+## Download
+
+The desktop app is the easiest way in: no Python, Node or config files. Install it, open it, and paste your
+keys into **KEYS**.
+
+<table>
+  <tr>
+    <th align="left">Platform</th>
+    <th align="left">Download</th>
+    <th align="left">Notes</th>
+  </tr>
+  <tr>
+    <td><b>macOS</b> · Apple Silicon (M1–M4)</td>
+    <td><a href="https://github.com/zadescoxp/calibrain-harness/releases/latest/download/Calibrain-Harness-mac-arm64.dmg"><img alt="Download for macOS Apple Silicon" src="https://img.shields.io/badge/Download-.dmg%20(Apple%20Silicon)-ff8a1f?style=for-the-badge&logo=apple&logoColor=white"></a></td>
+    <td>macOS 11 or later</td>
+  </tr>
+  <tr>
+    <td><b>macOS</b> · Intel</td>
+    <td><a href="https://github.com/zadescoxp/calibrain-harness/releases/latest/download/Calibrain-Harness-mac-x64.dmg"><img alt="Download for macOS Intel" src="https://img.shields.io/badge/Download-.dmg%20(Intel)-ff8a1f?style=for-the-badge&logo=apple&logoColor=white"></a></td>
+    <td>macOS 11 or later</td>
+  </tr>
+  <tr>
+    <td><b>Windows</b> · 64-bit</td>
+    <td><a href="https://github.com/zadescoxp/calibrain-harness/releases/latest/download/Calibrain-Harness-win-x64.exe"><img alt="Download for Windows" src="https://img.shields.io/badge/Download-.exe%20installer-ff8a1f?style=for-the-badge&logo=windows&logoColor=white"></a></td>
+    <td>Windows 10 / 11, per-user install, no admin rights</td>
+  </tr>
+</table>
+
+All versions and checksums are on the [releases page](https://github.com/zadescoxp/calibrain-harness/releases). Not sure which Mac you have?
+Apple menu › **About This Mac**: "Chip: Apple M…" means Apple Silicon.
+
+**First launch.** The builds are not code-signed yet, so the OS asks once:
+
+- **macOS:** open the `.dmg` and drag the app to **Applications**. The first time, right-click the app ›
+  **Open** › **Open** (or System Settings › Privacy & Security › **Open Anyway**).
+- **Windows:** if SmartScreen appears, click **More info** › **Run anyway**.
+
+**Then, in the app:**
+
+1. Type **KEYS** (or click it in the command bar) and paste a **Kairos** or **Jev** key, plus your
+   **Bybit Demo Trading** keys (bybit.com › switch to Demo Trading › avatar › API; read + trade, no withdrawals).
+2. Watch the signals in observe-only mode. Switch on **AUTO-TRADE** when you want the bot to place demo orders.
+3. Keys and data stay on your computer, in a private per-user folder (**File › Open Data Folder**). Keys are never
+   logged or shown again; the app only displays their last four characters.
+
 ## What it is
 
 Calibrain Harness connects a **high-speed classification model** to perpetual futures and treats every answer
 as a forecast that will be checked. On each closed bar it asks the model a small set of
 **labellable questions** ("which is touched first in the next 2 h: +1.0% or −0.6%?"), turns the
-probabilities into expected value in code, trades the ones that clear the gates on Bybit testnet
+probabilities into expected value in code, trades the ones that clear the gates on Bybit Demo Trading or Testnet
 (long and short, with protected stops and targets), and then scores **every** prediction against
 what the market actually did, traded or not.
 
@@ -75,12 +129,13 @@ while the bot is flat), so results never mix two models.
 - **Evaluation built in.** Brier/RPS skill vs climatology and vs the base rates the model was shown,
   AUC, reliability diagrams, PIT, EV ranking, repeat and mirror consistency probes, execution
   quality, and per-run results (Run 1, Run 2, …, Overall).
-- **Safety.** Testnet-only host, keys only in `.env`, kill switch, daily loss limit, per-trade,
+- **Safety.** Paper-money hosts only (Bybit Demo / Testnet), keys only in `.env`, kill switch, daily loss limit, per-trade,
   portfolio and same-direction risk caps, venue-divergence gate.
 
 ## Quick start
 
-Requirements: Python 3.12, Node.js 20+ with npm, a Kairos or Jev API key, and Bybit **testnet** API keys.
+Requirements: Python 3.12, Node.js 20+ with npm, a Kairos or Jev API key, and Bybit **Demo Trading** (or **Testnet**) API keys.
+Just want to use it? Grab the [desktop app](#download) instead.
 
 ```bash
 git clone https://github.com/zadescoxp/calibrain-harness.git
@@ -106,7 +161,7 @@ socket from that one address; there is no separate Node process to run.
   [testnet.bybit.com → API management](https://testnet.bybit.com/app/user/api-management) with
   Contract → Orders + Positions and **no withdrawal permission**.
 - **Observe-only first.** The bot starts without placing orders. Decisions are made and scored;
-  switch on **AUTO-TRADE** in the command bar to trade on testnet.
+  switch on **AUTO-TRADE** in the command bar to trade on the demo/testnet venue.
 - **Kill switch.** The KILL button, or `touch KILL` in the project folder: closes bot positions,
   cancels orders and halts.
 
@@ -129,6 +184,93 @@ the API and the live socket work either way.
 .venv/bin/python scripts/kairos_smoke.py SOLUSDT --model jev   # same, against a specific model
 .venv/bin/python scripts/testnet_smoke.py SOLUSDT long    # min-size testnet open -> verify stop -> close
 ```
+
+## Desktop app (macOS and Windows)
+
+The same terminal ships as a desktop app (see [Download](#download)). This section covers how it works and how
+to build it.
+
+**How it is built.** An [Electron](https://www.electronjs.org/) shell (`desktop/`) wraps the existing UI
+and a copy of the Python service frozen with [PyInstaller](https://pyinstaller.org/), so no Python is needed on
+the user's machine. Electron was chosen over Tauri because its Chromium renders the UI exactly as the browser
+workflow does, Node's `child_process` gives full control of the backend process on both OSes, and
+electron-builder handles DMG/NSIS, signing and notarization, with no Rust toolchain needed. The cost is size:
+about 130 MB per installer.
+
+**What the app does**
+
+- Starts the service on `127.0.0.1` on its own port (18800 by default; if that port is taken it picks a
+  free one and remembers it), waits for `/api/health` to answer from its own child process, then shows the UI
+  in a dark native window (minimum size 720×480). A start-up screen shows progress and, if the engine fails,
+  the last log lines with RESTART / OPEN LOG FOLDER / QUIT.
+- Keeps state in a per-user folder, never inside the app bundle. The folder is owner-only and opens from
+  **File › Open Data Folder**. On first run it gets a `.env` with `CTB_VENUE=demo`.
+  - macOS: `~/Library/Application Support/Calibrain Harness/harness/`
+  - Windows: `%APPDATA%\Calibrain Harness\harness\`
+
+  It holds `.env` (keys and settings: mode 0600 on macOS; on Windows the per-user ACL of `%APPDATA%` applies), `data/ctb.db`, `KILL` and `logs/backend.log`. Keys
+  exported in the shell that launched the app are ignored, so this `.env` is the only source of keys.
+- Owns the backend's lifetime: the backend's stdin is a lifeline. Quitting closes it, the service stops
+  cleanly (well under a second) and is force-killed after 8 s if it hangs. If the app itself crashes or is
+  killed, the pipe closes and the backend exits on its own, so no orphan process is left. Venue and symbol
+  changes that restart the service exit with code 75 and the app starts it again on the same port; the page
+  reconnects by itself.
+- Single instance (two engines must not share one database and Bybit account). Links open in the default
+  browser, and nothing but the local service loads in the window. **File › Open in Browser** opens the same
+  terminal in a browser tab.
+
+The backend learns all this from environment variables the app sets: `CTB_HOME` (state folder),
+`CTB_UI_DIR` (bundled UI), `CTB_PORT`, and `CTB_SUPERVISED=1` (stdin lifeline, exit-code restarts). Without
+them, `python -m ctb.server` behaves exactly as before.
+
+### Building it
+
+```bash
+cd desktop
+npm ci
+npm run dist:mac        # builds web-next, freezes the backend, then dist/*.dmg + .zip for this Mac's arch
+npm run dist:win        # same on Windows: dist/*.exe (NSIS installer, per-user, no admin needed)
+npm start               # dev: run the shell against the repo's .venv and web-next/out (no packaging)
+```
+
+`npm run build:backend` creates its own venv in `desktop/.build-venv` (set `PYTHON=python3.12` to pick the
+interpreter) and writes `desktop/backend-dist/ctb-backend/`. `node scripts/smoke-backend.mjs` checks that
+build headless. Icons come from `web-next/app/icon.svg`; regenerate them with `npm run build:icons` (on macOS)
+and commit them.
+
+PyInstaller cannot cross-compile, so each OS and architecture builds on its own runner. The
+[`Desktop` workflow](.github/workflows/desktop.yml) builds macOS arm64 (`macos-15`), macOS x64
+(`macos-15-intel`) and Windows x64. Pushing a `v*` tag publishes a GitHub release with the installers under
+stable names, so the [Download](#download) links always point at the latest version. Running it by hand from the
+Actions tab keeps the installers as workflow artifacts instead.
+
+```bash
+# cut a release: bump "version" in desktop/package.json, commit, then
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+### Code signing and notarization (not set up yet)
+
+The installers are currently **unsigned**. The macOS app is ad-hoc signed (`desktop/scripts/adhoc-sign.js`)
+so it runs on Apple Silicon, but Gatekeeper and SmartScreen will warn:
+
+- **macOS:** the first time, right-click the app › **Open** (or System Settings › Privacy & Security ›
+  **Open Anyway**). A build you download yourself may need `xattr -dr com.apple.quarantine "/Applications/Calibrain Harness.app"`.
+- **Windows:** SmartScreen › **More info** › **Run anyway**.
+
+To sign, add these repository secrets. The workflow passes them to electron-builder and skips any that are
+missing.
+
+| Secret | For |
+|---|---|
+| `MAC_CERT_P12_BASE64`, `MAC_CERT_PASSWORD` | "Developer ID Application" certificate exported as .p12, base64-encoded |
+| `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` | Notarization (an app-specific password from appleid.apple.com) |
+| `WIN_CERT_PFX_BASE64`, `WIN_CERT_PASSWORD` | Windows Authenticode certificate (.pfx). EV / cloud-HSM certificates (e.g. Azure Trusted Signing) need electron-builder's `win.azureSignOptions` instead. |
+
+With a Developer ID certificate, electron-builder signs every Mach-O in the bundle (including the frozen
+Python) with the hardened runtime and `desktop/build/entitlements.mac.plist`, then notarizes and staples when
+the Apple ID secrets are set. Electron needs JIT; the bundled Python needs unsigned executable memory and
+disabled library validation.
 
 ## Using the terminal
 
@@ -259,7 +401,39 @@ decision counts only if it starts after the previous counted decision's horizon 
   slippage, fees, a market-impact proxy (our size against mainnet depth within 10 bp), markouts
   1/5/15 minutes after entry, maker fill rate, wait time and the R of missed maker entries.
 
-## Execution on testnet
+## Demo trading and cost realism
+
+Every setting is editable in the terminal and saved to `.env` for you: **KEYS** (model keys, and Bybit keys stored per venue), **CONFIG** (venue, fees and slippage, risk, signal gates, execution, brackets, model budget), **STRATEGY**, **UNIV**, the trade timeframe and the model switch. A venue switch needs that venue's keys and no open bot trades; it restarts the service (~15 s), starts a new run and leaves auto-trade off.
+
+Switch venue in the terminal (**CONFIG** → Order venue, or **KEYS** → USE DEMO), or set `CTB_VENUE=demo`. Demo sends orders to Bybit **Demo Trading** (`api-demo.bybit.com`, private stream
+`stream-demo.bybit.com`): demo funds on the real mainnet market, so the thin, dislocated testnet book
+is gone. Bybit serves no public market data on the demo domain, so instruments, tickers, the order
+book and the venue ticker stream come from the unsigned mainnet public API. Keys come from bybit.com
+after switching to Demo Trading (avatar → API); testnet keys do not work there. `CTB_VENUE=testnet`
+keeps the old behaviour. A venue change starts a new run, so testnet and demo results never mix.
+
+Bybit does not document how demo orders are matched or whether demo fees are charged, so with
+`CTB_COST_REALISM=1` (default) every demo trade is booked at the **worse** of Bybit's numbers and a
+real-market model (`ctb/broker/realism.py`):
+
+| Cost | Real-market model | Applied when |
+| --- | --- | --- |
+| Entry slippage (taker) | VWAP of walking the mainnet book for the filled size at order time | the demo fill is better than the walk |
+| Exit slippage (bot exits) | Same walk when the bot sends its stop, time or kill exit | same |
+| Exit slippage (exchange stop) | At least `CTB_STOP_SLIP_BP` past the trigger | the demo fill is closer than that |
+| Fees | `CTB_TAKER_FEE_BP` / `CTB_MAKER_FEE_BP` per leg (maker for post-only entries and resting targets) | Bybit charged less |
+| Funding | Every mainnet funding settlement held through (long pays a positive rate) | always: Bybit closed-P&L excludes it |
+
+If Bybit already charges real costs, the adjustment is ~0. `realized_pnl`, `fees`, `r_mult` and the
+slippage columns hold the booked numbers, so the daily loss limit, the measured cost model, EVAL and
+VALID all see the realistic figures. Bybit's raw numbers stay in `venue_pnl`, `venue_fees` and
+`venue_*_slip_bp`, and the breakdown per leg is in `realism_json`. Resting orders (maker entries,
+targets) have no slippage to walk, but a simulator can fill them on a touch where a real order
+would still be queued: each such fill is checked against mainnet trades (`through` / `touch` /
+`none`) and reported in EVAL, not repriced. The account panel shows equity as Bybit reports it;
+today's P&L is the booked figure.
+
+## Execution on the venue
 
 - **Entries** (`CTB_ENTRY_MODE`): `maker` (default) rests a post-only limit at the best bid (long)
   or ask (short) with the backstop stop attached, and cancels whatever is unfilled after
@@ -387,14 +561,16 @@ imbalance, branching ratio, excitation against the fitted baseline), `order_book
 | `CTB_SYMMETRIZE` / `CTB_ENSEMBLE` / `CTB_ENSEMBLE_MAX_RPH` | 1 / – / 120 | Mirror averaging, extra models |
 | `CTB_TRADE_TRIGGER` / `CTB_DIRECTION_SOURCE` / `CTB_MIN_FLOW_SCORE` | events / model / 0.25 | When and which side to trade |
 | `CTB_REQUIRE_BIG_MOVE` / `CTB_BIG_MOVE_MARGIN` / `CTB_ALLOWED_REGIMES` | 1 / 0.03 / – | Filters |
+| `CTB_VENUE` / `CTB_COST_REALISM` | testnet / 1 | Order venue (`demo` or `testnet`); demo re-booking at real-market cost |
 | `CTB_MAX_SPREAD_BP` / `CTB_MAX_TESTNET_SPREAD_BP` / `CTB_MIN_DEPTH_MULT` | 5 / 25 / 3 | Liquidity gates |
 | `CTB_REQUIRE_VALIDATED` / `CTB_DRIFT_ACTION` | 1 / base | Validation gate for strict trades; action on drift |
 | `CTB_DYNAMIC_SIZING` / `CTB_DD_THROTTLE_PCT` / `CTB_BE_TRIGGER_R` / `CTB_BE_OFFSET_BP` | 1 / 1.0 / 1.0 / 5 | Sizing and break-even |
 
 ## Safety
 
-- The Bybit host is hard-coded to `api-testnet.bybit.com`. There is no mainnet switch.
-- Keys are read from `.env` only (owner-only permissions, gitignored). They are never logged,
+- Signed requests go only to `api-testnet.bybit.com` or `api-demo.bybit.com` (allowlist in
+  `ctb/broker/venue.py`). Both are paper money; there is no real-money venue and no env flag for one.
+- Keys are read from `.env` only (owner-only permissions, gitignored; in the desktop app, the per-user data folder). They are never logged,
   stored in the database or sent to the browser, which only sees the last four characters.
 - The server binds to 127.0.0.1 and refuses cross-origin writes.
 - Positions opened by hand on testnet are shown and never touched by the bot (except the kill switch).
@@ -419,6 +595,7 @@ ctb/                      Python service (internal package name from the project
   runs.py · universe.py   test runs, symbol validation
   engine.py · server.py   orchestration, API, /ws, serves the UI
 web-next/                 terminal UI (Next.js 16, static export to web-next/out)
+desktop/                  desktop app: Electron shell, PyInstaller backend build, icons, installer config
 scripts/                  smoke tests, backfills, run definitions
 docs/                     brand assets and demo media
 ```
