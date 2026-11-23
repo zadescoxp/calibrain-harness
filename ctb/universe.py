@@ -1,7 +1,7 @@
 """Which perps the bot may trade: candidates, checks and validation for the symbol picker.
 
 A symbol is only accepted if it is a Trading USDT linear perp on BOTH Bybit mainnet (signals) and
-Bybit testnet (orders). Testnet depth is reported so a thin book is visible before it is chosen:
+the order venue (Bybit testnet, or Demo Trading, which lists what mainnet lists). Venue depth is reported so a thin book is visible before it is chosen:
 entries are capped at max_entry_slip_bp past the best price, so a book with little depth inside
 that cap means small or unfilled orders.
 """
@@ -50,13 +50,14 @@ async def listed(session: aiohttp.ClientSession, base: str) -> dict[str, str]:
     return out
 
 
-async def testnet_depth(session: aiohttp.ClientSession, symbol: str, thin_usd: float = THIN_DEPTH_USD) -> dict[str, Any]:
-    """Resting notional within 20 bp of mid on each side of the TESTNET book (cached 5 min)."""
-    hit = _depth_cache.get(symbol)
+async def testnet_depth(session: aiohttp.ClientSession, symbol: str, thin_usd: float = THIN_DEPTH_USD,
+                        venue_rest: str = TESTNET) -> dict[str, Any]:
+    """Resting notional within 20 bp of mid on each side of the order venue's book (cached 5 min)."""
+    hit = _depth_cache.get(f"{venue_rest}|{symbol}")
     if hit and time.time() - hit[0] < 300:
         return hit[1]
     try:
-        res = await _get(session, TESTNET, "/v5/market/orderbook", {"category": "linear", "symbol": symbol, "limit": 200})
+        res = await _get(session, venue_rest, "/v5/market/orderbook", {"category": "linear", "symbol": symbol, "limit": 200})
         bids = [(float(p), float(q)) for p, q in res.get("b", [])]
         asks = [(float(p), float(q)) for p, q in res.get("a", [])]
         if not bids or not asks:
@@ -70,13 +71,13 @@ async def testnet_depth(session: aiohttp.ClientSession, symbol: str, thin_usd: f
                    "thin": min(a, b) < thin_usd}
     except Exception as exc:  # noqa: BLE001
         out = {"ok": False, "reason": str(exc)[:120]}
-    _depth_cache[symbol] = (time.time(), out)
+    _depth_cache[f"{venue_rest}|{symbol}"] = (time.time(), out)
     return out
 
 
 async def candidates(session: aiohttp.ClientSession, universe: list[dict[str, Any]], selected: list[str],
-                     thin_usd: float = THIN_DEPTH_USD) -> list[dict[str, Any]]:
-    main, test = await asyncio.gather(listed(session, MAINNET), listed(session, TESTNET))
+                     thin_usd: float = THIN_DEPTH_USD, venue_rest: str = TESTNET) -> list[dict[str, Any]]:
+    main, test = await asyncio.gather(listed(session, MAINNET), listed(session, venue_rest))
     by_sym = {u["symbol"]: u for u in universe}
     syms = list(dict.fromkeys([*selected, *by_sym]))
     sem = asyncio.Semaphore(8)
@@ -85,7 +86,7 @@ async def candidates(session: aiohttp.ClientSession, universe: list[dict[str, An
         if sym not in test:
             return None
         async with sem:
-            return await testnet_depth(session, sym, thin_usd)
+            return await testnet_depth(session, sym, thin_usd, venue_rest)
 
     depths = await asyncio.gather(*(depth(s) for s in syms))
     out = []
@@ -98,7 +99,8 @@ async def candidates(session: aiohttp.ClientSession, universe: list[dict[str, An
     return out
 
 
-async def validate(session: aiohttp.ClientSession, symbols: list[str]) -> list[str]:
+async def validate(session: aiohttp.ClientSession, symbols: list[str], venue_rest: str = TESTNET,
+                   venue_name: str = "testnet") -> list[str]:
     errs: list[str] = []
     if not symbols:
         errs.append("choose at least one symbol")
@@ -111,9 +113,9 @@ async def validate(session: aiohttp.ClientSession, symbols: list[str]) -> list[s
         errs.append(f"not USDT perp symbols: {', '.join(bad)}")
     if errs:
         return errs
-    main, test = await asyncio.gather(listed(session, MAINNET), listed(session, TESTNET))
+    main, test = await asyncio.gather(listed(session, MAINNET), listed(session, venue_rest))
     if missing := [s for s in symbols if s not in main]:
         errs.append(f"not a trading perp on Bybit mainnet (no signals): {', '.join(missing)}")
     if missing := [s for s in symbols if s not in test]:
-        errs.append(f"not listed on Bybit testnet (cannot trade): {', '.join(missing)}")
+        errs.append(f"not listed on Bybit {venue_name} (cannot trade): {', '.join(missing)}")
     return errs
