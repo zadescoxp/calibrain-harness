@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:">
+<title>Calibrain Harness</title>
+<style>
+  :root { color-scheme: dark; --bg: #0a0a0a; --fg: #d9d9d9; --dim: #7a7a7a; --acc: #ff8a1f; --bad: #ff5d5d; --line: #222; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; background: var(--bg); color: var(--fg);
+    font: 13px/1.55 ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; }
+  body { display: flex; align-items: center; justify-content: center; padding: 16px; -webkit-user-select: none; user-select: none; }
+  .box { width: min(640px, 100%); }
+  .head { display: flex; align-items: center; gap: 14px; margin-bottom: 22px; }
+  .head svg { width: 44px; height: 44px; flex: none; }
+  .name { font-size: 15px; letter-spacing: .12em; text-transform: uppercase; }
+  .name small { display: block; color: var(--dim); letter-spacing: .04em; text-transform: none; font-size: 12px; }
+  .status { border-top: 1px solid var(--line); padding-top: 14px; }
+  .status b { color: var(--acc); font-weight: 600; }
+  .status.err b { color: var(--bad); }
+  .cursor { display: inline-block; width: 8px; height: 14px; background: var(--acc); vertical-align: -2px; animation: blink 1s steps(1) infinite; }
+  .err .cursor { display: none; }
+  @keyframes blink { 50% { opacity: 0; } }
+  pre { margin: 14px 0 0; max-height: 46vh; overflow: auto; background: #050505; border: 1px solid var(--line); padding: 10px;
+    color: var(--dim); font: 11.5px/1.5 inherit; white-space: pre-wrap; word-break: break-word; -webkit-user-select: text; user-select: text; }
+  pre:empty { display: none; }
+  .actions { margin-top: 14px; display: none; gap: 10px; flex-wrap: wrap; }
+  .err .actions { display: flex; }
+  a.btn { color: var(--fg); text-decoration: none; border: 1px solid #3a3a3a; padding: 5px 12px; }
+  a.btn:hover { border-color: var(--acc); color: var(--acc); }
+</style>
+</head>
+<body>
+<div class="box">
+  <div class="head">
+    <svg viewBox="-6 -6 76 76" aria-hidden="true"><rect x="-6" y="-6" width="76" height="76" rx="17" fill="#0A0A0A"/><rect x="-5.5" y="-5.5" width="75" height="75" rx="16.5" fill="none" stroke="#FFFFFF" stroke-opacity="0.12"/><path d="M 46.849 17.151 A 21 21 0 1 0 46.849 46.849" fill="none" stroke="#FFFFFF" stroke-width="8"/><rect x="49" y="28" width="8" height="8" fill="#FF8A1F"/></svg>
+    <div class="name">Calibrain Harness<small>Bybit Demo / Testnet research terminal</small></div>
+  </div>
+  <div class="status" id="status"><b id="title">STARTING</b> <span id="msg">starting the engine…</span> <span class="cursor"></span>
+    <pre id="log"></pre>
+    <div class="actions">
+      <a class="btn" href="calibrain://restart">RESTART ENGINE</a>
+      <a class="btn" href="calibrain://logs">OPEN LOG FOLDER</a>
+      <a class="btn" href="calibrain://quit">QUIT</a>
+    </div>
+  </div>
+</div>
+<script>
+  // main.js calls window.setStatus(...) through executeJavaScript; this page has no Node access.
+  window.setStatus = (title, msg, log, isError) => {
+    document.getElementById("title").textContent = title;
+    document.getElementById("msg").textContent = msg;
+    document.getElementById("log").textContent = log || "";
+    document.getElementById("status").classList.toggle("err", !!isError);
+  };
+</script>
+</body>
+</html>
