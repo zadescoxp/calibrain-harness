@@ -21,7 +21,7 @@ export type State = {
   ticks: Record<string, Tick>;
   book: Book | null;
   socket: { connected: boolean; lastMsg: number; latencyMs: number | null; msgs: number };
-  modal: { kind: "decision" | "state" | "keys" | "help" | "tf" | "universe" | "strategy"; data?: any } | null;
+  modal: { kind: "decision" | "state" | "keys" | "help" | "tf" | "universe" | "strategy" | "config"; data?: any } | null;
   cmdHint: string | null;
   rev: { trades: number; events: number; eval: number };
 };
@@ -48,6 +48,17 @@ const subscribe = (l: () => void) => {
 /** Subscribe to one slice. The selector must return a stable reference (a store field), not a new object. */
 export function useStore<T>(sel: (s: State) => T): T {
   return useSyncExternalStore(subscribe, () => sel(state), () => sel(state));
+}
+
+/** The order venue (Bybit testnet or Demo Trading). Old servers without venue fields read as testnet. */
+export type VenueInfo = { name: string; label: string; short: string; keysUrl: string; demo: boolean; realism: boolean };
+export function venueOf(st: any): VenueInfo {
+  const name = st?.venue_name || "testnet";
+  return { name, label: st?.venue_label || "BYBIT TESTNET", short: name.toUpperCase(), demo: name === "demo",
+           keysUrl: st?.venue_keys_url || "https://testnet.bybit.com/app/user/api-management", realism: !!st?.cost_realism };
+}
+export function useVenue(): VenueInfo {
+  return venueOf(useStore((s) => s.ov?.settings));
 }
 
 /** Label of the active classification model ("Kairos", "Jev", ...). */
