@@ -1,0 +1,612 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Calibrain Harness</title>
+<meta name="description" content="Plug a fast classification model into live crypto perpetual markets and find out, forecast by forecast, whether it really has an edge. Free desktop app for macOS and Windows.">
+<meta property="og:title" content="Calibrain Harness">
+<meta property="og:description" content="Find out if your model actually knows the market. Every forecast traded on Bybit Demo and scored against what happened next.">
+<meta property="og:image" content="https://zadescoxp.github.io/calibrain-harness/media/calibrain-harness-terminal.jpg">
+<meta property="og:url" content="https://zadescoxp.github.io/calibrain-harness/">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#EDEFF2">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:ital,wght@0,400..900;1,400..700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --fog: #EDEFF2;
+    --fog-2: #E2E6EA;
+    --surface: #F7F8FA;
+    --ink: #121417;
+    --ink-2: #2A2E34;
+    --graphite: #5B6470;
+    --line: #CDD3DA;
+    --signal: #FF8A1F;
+    --signal-ink: #B85600;
+    --teal: #1F9E89;
+    --miss: #9AA3AE;
+    --radius-l: 22px;
+    --radius-s: 10px;
+    --wrap: 1180px;
+    --gut: clamp(16px, 4vw, 40px);
+    font-family: "Schibsted Grotesk", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    color: var(--ink);
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+  body { margin: 0; background: var(--fog); font-size: 17px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
+  a { color: inherit; }
+  img, video, svg { display: block; max-width: 100%; }
+  :focus-visible { outline: 3px solid var(--signal); outline-offset: 3px; border-radius: 6px; }
+  .wrap { max-width: var(--wrap); margin: 0 auto; padding: 0 var(--gut); }
+  h1, h2, h3 { margin: 0; font-weight: 700; letter-spacing: -0.025em; line-height: 1.05; }
+  p, figure { margin: 0; }
+
+  /* ---------------------------------------------------------------- nav */
+  .nav { position: sticky; top: 0; z-index: 20; background: color-mix(in srgb, var(--fog) 86%, transparent);
+         backdrop-filter: saturate(1.4) blur(14px); -webkit-backdrop-filter: saturate(1.4) blur(14px);
+         border-bottom: 1px solid transparent; transition: border-color .2s; }
+  .nav.scrolled { border-bottom-color: var(--line); }
+  .nav .wrap { display: flex; align-items: center; gap: 28px; height: 64px; }
+  .brand { display: flex; align-items: center; gap: 10px; text-decoration: none; font-weight: 700; font-size: 18px; letter-spacing: -0.02em; }
+  .brand svg { width: 30px; height: 30px; }
+  .brand span { color: var(--graphite); font-weight: 450; }
+  .nav-links { display: flex; gap: 24px; margin-left: auto; font-size: 15px; }
+  .nav-links a { text-decoration: none; color: var(--ink-2); }
+  .nav-links a:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 4px; }
+  .nav .btn-mini { font-size: 14px; font-weight: 600; text-decoration: none; padding: 8px 14px; border-radius: 999px; background: var(--ink); color: var(--fog); }
+  @media (max-width: 760px) { .nav-links { display: none; } .nav .btn-mini { margin-left: auto; } }
+
+  /* ---------------------------------------------------------------- hero */
+  .hero { padding: clamp(40px, 7vw, 96px) 0 clamp(56px, 8vw, 110px); }
+  .hero .wrap { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, .95fr); gap: clamp(32px, 5vw, 72px); align-items: center; }
+  @media (max-width: 960px) { .hero .wrap { grid-template-columns: minmax(0, 1fr); } }
+  .hero h1 { font-size: clamp(44px, 6.6vw, 86px); font-weight: 800; letter-spacing: -0.045em; line-height: .96; }
+  .hero h1 .soft { color: var(--graphite); font-weight: 500; display: block; }
+  .lede { margin-top: 26px; max-width: 34em; font-size: clamp(17px, 1.6vw, 20px); color: var(--ink-2); }
+  .cta { margin-top: 36px; display: flex; flex-wrap: wrap; gap: 14px 18px; align-items: center; }
+
+  .dl { display: inline-flex; align-items: center; gap: 14px; padding: 14px 24px 14px 18px; border-radius: 16px; background: var(--ink); color: var(--fog);
+        text-decoration: none; border: 0; cursor: pointer; font: inherit; transition: transform .15s ease, background .15s ease; }
+  .dl:hover { background: #000; transform: translateY(-1px); }
+  .dl:active { transform: translateY(0); }
+  .dl .os { width: 30px; height: 30px; flex: none; }
+  .dl .txt { display: flex; flex-direction: column; line-height: 1.2; text-align: left; }
+  .dl b { font-size: 17px; font-weight: 650; }
+  .dl small { font-size: 13px; color: #AEB6C0; }
+  .dl .arrow { width: 18px; height: 18px; margin-left: 6px; color: var(--signal); }
+  .alt { font-size: 14px; color: var(--graphite); }
+  .alt a { color: var(--ink-2); text-underline-offset: 3px; }
+  .ghost { display: inline-flex; align-items: center; gap: 10px; font: inherit; font-size: 16px; font-weight: 600; color: var(--ink);
+           background: none; border: 1.5px solid var(--ink); border-radius: 14px; padding: 13px 20px; cursor: pointer; text-decoration: none; }
+  .ghost:hover { background: var(--ink); color: var(--fog); }
+  .ghost svg { width: 14px; height: 14px; }
+  .cta-note { flex-basis: 100%; font-size: 14px; color: var(--graphite); }
+
+  /* the forecast ledger */
+  .ledger { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-l); padding: 22px 22px 18px;
+            box-shadow: 0 1px 0 #fff inset, 0 30px 60px -36px rgba(18, 20, 23, .35); }
+  .ledger-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+  .ledger-head h3 { font-size: 16px; letter-spacing: -0.01em; }
+  .ledger-head p { font-size: 13px; color: var(--graphite); }
+  .rows { list-style: none; margin: 0; padding: 0; min-height: 316px; }
+  .row { display: grid; grid-template-columns: 58px minmax(0, 1fr) 92px; gap: 12px; align-items: center; padding: 11px 0; border-bottom: 1px dashed var(--line); }
+  .row:last-child { border-bottom: 0; }
+  .row.enter { animation: enter .5s cubic-bezier(.2,.7,.2,1); }
+  @keyframes enter { from { opacity: 0; transform: translateY(-8px); } }
+  .sym { font-weight: 700; font-size: 15px; }
+  .q { font-size: 14px; color: var(--ink-2); min-width: 0; }
+  .q .bar { position: relative; height: 6px; border-radius: 3px; background: var(--fog-2); margin-top: 7px; overflow: hidden; }
+  .q .bar i { position: absolute; inset: 0 auto 0 0; background: var(--signal); border-radius: 3px; }
+  .res { text-align: right; font-size: 14px; }
+  .res .p { font-weight: 700; font-size: 16px; }
+  .res .o { display: block; font-size: 12.5px; color: var(--graphite); }
+  .res .o.hit { color: var(--teal); font-weight: 600; }
+  .res .o.miss { color: var(--miss); }
+  .pending .o::after { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--signal); margin-left: 6px; vertical-align: 1px; animation: pulse 1s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .2; } }
+  .score { margin-top: 16px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+  .score div { background: var(--fog); border-radius: var(--radius-s); padding: 10px 12px; }
+  .score b { display: block; font-size: 22px; letter-spacing: -0.02em; }
+  .score span { display: block; font-size: 12.5px; line-height: 1.35; color: var(--graphite); }
+  @media (max-width: 520px) {
+    .rows { min-height: 0; }
+    .row { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "sym res" "q q"; row-gap: 4px; }
+    .sym { grid-area: sym; } .q { grid-area: q; } .res { grid-area: res; display: flex; gap: 8px; align-items: baseline; }
+    .res .o { display: inline; }
+    .score b { font-size: 19px; }
+  }
+
+  /* ---------------------------------------------------------------- video */
+  .film { background: var(--ink); color: var(--fog); padding: clamp(64px, 9vw, 120px) 0; }
+  .film-head { display: flex; flex-wrap: wrap; gap: 16px 48px; align-items: end; justify-content: space-between; margin-bottom: 36px; }
+  .film h2 { font-size: clamp(32px, 4.4vw, 56px); max-width: 14em; }
+  .film-head p { max-width: 30em; color: #AEB6C0; }
+  .screen { position: relative; border-radius: var(--radius-l); overflow: hidden; background: #000; aspect-ratio: 1600 / 932;
+            box-shadow: 0 0 0 1px #2A2E34, 0 40px 120px -40px rgba(255, 138, 31, .28); }
+  .screen video { width: 100%; height: 100%; object-fit: cover; }
+  .play { position: absolute; inset: 0; display: grid; place-items: center; background: linear-gradient(180deg, rgba(0,0,0,0) 40%, rgba(0,0,0,.55));
+          border: 0; cursor: pointer; color: var(--fog); font: inherit; }
+  .play span { display: inline-flex; align-items: center; gap: 14px; padding: 16px 26px 16px 18px; border-radius: 999px; background: rgba(18,20,23,.72);
+               backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); font-weight: 650; font-size: 17px; border: 1px solid rgba(255,255,255,.14); }
+  .play span i { width: 40px; height: 40px; border-radius: 50%; background: var(--signal); display: grid; place-items: center; }
+  .play span i svg { width: 16px; height: 16px; margin-left: 3px; }
+  .play:hover span { background: rgba(18,20,23,.9); }
+  .screen.playing .play { display: none; }
+  .chapters { margin-top: 22px; display: flex; flex-wrap: wrap; gap: 10px; }
+  .chapters button { font: inherit; font-size: 14px; color: #D6DBE1; background: #1D2025; border: 1px solid #2E333A; border-radius: 999px; padding: 7px 14px; cursor: pointer; }
+  .chapters button:hover { border-color: var(--signal); color: #fff; }
+  .chapters button b { color: var(--signal); font-weight: 600; margin-right: 6px; }
+
+  /* ---------------------------------------------------------------- loop */
+  .section { padding: clamp(72px, 10vw, 132px) 0; }
+  .section h2 { font-size: clamp(32px, 4.4vw, 56px); max-width: 15em; }
+  .section .intro { margin-top: 18px; max-width: 38em; color: var(--ink-2); font-size: 18px; }
+  .loop { margin-top: 56px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; border-top: 2px solid var(--ink); }
+  .loop li { list-style: none; padding: 24px 22px 0 0; position: relative; }
+  .loop li + li { padding-left: 22px; border-left: 1px solid var(--line); }
+  .loop .n { font-size: 15px; font-weight: 700; color: var(--signal-ink); }
+  .loop h3 { font-size: 23px; margin: 10px 0 10px; letter-spacing: -0.02em; }
+  .loop p { font-size: 15.5px; color: var(--ink-2); }
+  .loop .back { margin-top: 26px; font-size: 14px; color: var(--graphite); grid-column: 1 / -1; }
+  @media (max-width: 860px) {
+    .loop { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); row-gap: 34px; }
+    .loop li:nth-child(3) { padding-left: 0; border-left: 0; }
+  }
+  @media (max-width: 520px) {
+    .loop { grid-template-columns: minmax(0, 1fr); }
+    .loop li, .loop li + li { padding: 20px 0 0; border-left: 0; border-top: 1px solid var(--line); }
+    .loop li:first-child { border-top: 0; }
+  }
+
+  /* ---------------------------------------------------------------- calibration */
+  .calib { background: var(--surface); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+  .calib .wrap { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); gap: clamp(32px, 6vw, 88px); align-items: center; }
+  @media (max-width: 900px) { .calib .wrap { grid-template-columns: minmax(0, 1fr); } }
+  .chart { background: var(--fog); border-radius: var(--radius-l); padding: clamp(18px, 3vw, 30px); }
+  .chart svg { width: 100%; height: auto; }
+  .chart figcaption { margin-top: 12px; font-size: 14px; color: var(--graphite); }
+  .facts { margin-top: 34px; display: grid; gap: 22px; }
+  .facts > div { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 14px; }
+  .facts svg { width: 22px; height: 22px; margin-top: 3px; color: var(--signal-ink); }
+  .facts h3 { font-size: 18px; letter-spacing: -0.01em; line-height: 1.3; }
+  .facts p { font-size: 15.5px; color: var(--ink-2); margin-top: 3px; }
+
+  /* ---------------------------------------------------------------- safety */
+  .safe .grid { margin-top: 48px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: clamp(16px, 2vw, 24px); }
+  @media (max-width: 860px) { .safe .grid { grid-template-columns: minmax(0, 1fr); } }
+  .safe li { display: flex; }
+  .safe article { flex: 1; padding: 26px 26px 28px; border-radius: var(--radius-l); background: var(--surface); border: 1px solid var(--line); }
+  .safe li:first-child article { background: var(--ink); color: var(--fog); border-color: var(--ink); }
+  .safe li:first-child article p { color: #AEB6C0; }
+  .safe h3 { font-size: 21px; letter-spacing: -0.02em; margin-bottom: 10px; }
+  .safe p { font-size: 15.5px; color: var(--ink-2); }
+
+  /* ---------------------------------------------------------------- download */
+  .get { padding: clamp(72px, 10vw, 132px) 0 clamp(64px, 8vw, 100px); }
+  .get-card { background: var(--ink); color: var(--fog); border-radius: 32px; padding: clamp(28px, 5vw, 64px); display: grid;
+              grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: clamp(28px, 5vw, 64px); align-items: start; }
+  @media (max-width: 900px) { .get-card { grid-template-columns: minmax(0, 1fr); } }
+  .get-card h2 { font-size: clamp(34px, 4.6vw, 60px); }
+  .get-card .intro { color: #AEB6C0; margin-top: 18px; font-size: 18px; max-width: 30em; }
+  .get-card .dl { background: var(--signal); color: #1A0E00; margin-top: 30px; }
+  .get-card .dl:hover { background: #FF9C40; }
+  .get-card .dl small { color: #5A3300; }
+  .get-card .dl .arrow { color: #1A0E00; }
+  .platforms { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+  .platforms a { display: grid; grid-template-columns: 26px minmax(0, 1fr) auto; gap: 14px; align-items: center; padding: 16px 18px; border-radius: 14px;
+                 border: 1px solid #2E333A; text-decoration: none; background: #181B1F; transition: border-color .15s; }
+  .platforms a:hover { border-color: #5B6470; }
+  .platforms a.mine { border-color: var(--signal); }
+  .platforms svg { width: 24px; height: 24px; }
+  .platforms b { display: block; font-size: 16px; font-weight: 650; }
+  .platforms span { font-size: 13.5px; color: #8E97A2; }
+  .platforms em { font-style: normal; font-size: 13px; color: var(--signal); font-weight: 600; }
+  .first-run { margin-top: 22px; font-size: 14px; color: #8E97A2; }
+  .first-run b { color: #D6DBE1; font-weight: 600; }
+  .src { margin-top: 18px; font-size: 14px; color: #8E97A2; }
+  .src a { color: #D6DBE1; }
+
+  footer { padding: 36px 0 48px; font-size: 14px; color: var(--graphite); }
+  footer .wrap { display: flex; flex-wrap: wrap; gap: 12px 28px; align-items: center; justify-content: space-between; }
+  footer nav { display: flex; gap: 20px; }
+  footer p { max-width: 40em; }
+</style>
+</head>
+<body>
+
+<header class="nav" id="nav">
+  <div class="wrap">
+    <a class="brand" href="#top" aria-label="Calibrain Harness home">
+      <svg viewBox="0 0 64 64" aria-hidden="true"><path d="M 46.849 17.151 A 21 21 0 1 0 46.849 46.849" fill="none" stroke="#121417" stroke-width="8"/><rect x="49" y="28" width="8" height="8" fill="#FF8A1F"/></svg>
+      Calibrain <span>Harness</span>
+    </a>
+    <nav class="nav-links" aria-label="Sections">
+      <a href="#demo">Demo</a>
+      <a href="#how">How it works</a>
+      <a href="#safety">Safety</a>
+      <a href="https://github.com/zadescoxp/calibrain-harness">GitHub</a>
+    </nav>
+    <a class="btn-mini" href="#download">Download</a>
+  </div>
+</header>
+
+<main id="top">
+  <section class="hero">
+    <div class="wrap">
+      <div>
+        <h1>Does your model know the market?<span class="soft">Ask it. Then keep score.</span></h1>
+        <p class="lede">Calibrain Harness puts a fast classification model on live crypto perpetuals. Every few minutes it asks the
+          model what happens next, trades the confident answers on a Bybit demo account, and checks every forecast against
+          what the market actually did.</p>
+        <div class="cta">
+          <a class="dl" id="hero-dl" href="#download">
+            <svg class="os" data-os-icon viewBox="0 0 24 24" aria-hidden="true"></svg>
+            <span class="txt"><b data-dl-title>Download the app</b><small data-dl-sub>Free for macOS and Windows</small></span>
+            <svg class="arrow" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v11m0 0-4.5-4.5M10 14l4.5-4.5M4 17h12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </a>
+          <button class="ghost" type="button" data-play>
+            <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M3 1.5v11l9-5.5z" fill="currentColor"/></svg>Watch the demo
+          </button>
+          <p class="cta-note" data-dl-alt>Also for <a href="#download">other platforms</a>. Open source, MIT licence.</p>
+        </div>
+      </div>
+
+      <figure class="ledger" aria-label="Example of forecasts being made and scored">
+        <div class="ledger-head">
+          <h3>Forecasts, scored as they resolve</h3>
+          <p>Illustration</p>
+        </div>
+        <ul class="rows" id="rows"></ul>
+        <div class="score" aria-live="off">
+          <div><b id="s-n">0</b><span>forecasts scored</span></div>
+          <div><b id="s-hit">–</b><span>came true</span></div>
+          <div><b id="s-skill">–</b><span>skill vs base rate</span></div>
+        </div>
+      </figure>
+    </div>
+  </section>
+
+  <section class="film" id="demo">
+    <div class="wrap">
+      <div class="film-head">
+        <h2>One minute inside the terminal</h2>
+        <p>Live candles and order book, the model's signal with its expected value after costs, and the evaluation screen
+          that tells you whether any of it is working.</p>
+      </div>
+      <div class="screen" id="screen">
+        <video id="video" src="media/calibrain-harness-demo.mp4" poster="media/calibrain-harness-terminal.jpg" preload="metadata" playsinline controls></video>
+        <button class="play" type="button" data-play aria-label="Play the demo video">
+          <span><i><svg viewBox="0 0 14 14" aria-hidden="true"><path d="M3 1.5v11l9-5.5z" fill="#1A0E00"/></svg></i>Play the 1-minute demo</span>
+        </button>
+      </div>
+      <div class="chapters" aria-label="Jump to a part of the video">
+        <button type="button" data-t="0"><b>0:00</b>Market monitor</button>
+        <button type="button" data-t="24"><b>0:24</b>Evaluation</button>
+        <button type="button" data-t="37"><b>0:37</b>Trades</button>
+        <button type="button" data-t="43"><b>0:43</b>News</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="how">
+    <div class="wrap">
+      <h2>A loop that runs on every closed bar</h2>
+      <p class="intro">Instead of asking a model for a buy or sell call, the harness asks questions that the market will answer
+        within hours. That makes every forecast checkable, traded or not.</p>
+      <ol class="loop">
+        <li>
+          <span class="n">1</span>
+          <h3>Ask</h3>
+          <p>The model sees the candles, order flow and funding, plus how often each outcome really happens. Then it answers
+            questions like "which comes first in the next two hours: +1.0% or −0.6%?"</p>
+        </li>
+        <li>
+          <span class="n">2</span>
+          <h3>Decide</h3>
+          <p>Its probabilities become an expected value after fees and slippage. Only trades that clear the edge, quality and
+            risk gates go through. The rest are still recorded.</p>
+        </li>
+        <li>
+          <span class="n">3</span>
+          <h3>Trade</h3>
+          <p>Long or short on Bybit Demo Trading, against the real market, with a protected stop and target from the first
+            second. Position size follows your risk per trade.</p>
+        </li>
+        <li>
+          <span class="n">4</span>
+          <h3>Score</h3>
+          <p>When the horizon passes, each forecast is labelled with what happened and scored. The calibration layer learns
+            from it, so a model that adds nothing stops driving trades.</p>
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <section class="section calib">
+    <div class="wrap">
+      <figure class="chart">
+        <svg viewBox="0 0 420 340" role="img" aria-labelledby="calib-t">
+          <title id="calib-t">Reliability diagram: forecast probability against how often the outcome happened. A well-calibrated model sits on the diagonal.</title>
+          <g stroke="#CDD3DA" stroke-width="1">
+            <line x1="50" y1="290" x2="400" y2="290"/><line x1="50" y1="20" x2="50" y2="290"/>
+            <line x1="50" y1="222.5" x2="400" y2="222.5" stroke-dasharray="3 5"/><line x1="50" y1="155" x2="400" y2="155" stroke-dasharray="3 5"/><line x1="50" y1="87.5" x2="400" y2="87.5" stroke-dasharray="3 5"/>
+          </g>
+          <line x1="50" y1="290" x2="400" y2="20" stroke="#5B6470" stroke-width="1.5" stroke-dasharray="6 6"/>
+          <polyline fill="none" stroke="#9AA3AE" stroke-width="2.5" stroke-linejoin="round" points="85,175 120,180 155,170 190,166 225,160 260,152 295,150 330,146 365,140"/>
+          <polyline fill="none" stroke="#FF8A1F" stroke-width="3" stroke-linejoin="round" points="85,266 120,240 155,212 190,188 225,158 260,131 295,104 330,80 365,52"/>
+          <g fill="#FF8A1F"><circle cx="85" cy="266" r="5"/><circle cx="120" cy="240" r="5"/><circle cx="155" cy="212" r="5"/><circle cx="190" cy="188" r="5"/><circle cx="225" cy="158" r="5"/><circle cx="260" cy="131" r="5"/><circle cx="295" cy="104" r="5"/><circle cx="330" cy="80" r="5"/><circle cx="365" cy="52" r="5"/></g>
+          <g font-size="12" fill="#5B6470" font-family="inherit">
+            <text x="50" y="312">0%</text><text x="212" y="312">forecast probability</text><text x="383" y="312">100%</text>
+            <text x="44" y="294" text-anchor="end">0%</text><text x="44" y="24" text-anchor="end">100%</text>
+            <text x="18" y="160" transform="rotate(-90 18 160)" text-anchor="middle">how often it happened</text>
+          </g>
+          <g font-size="13" font-family="inherit" font-weight="600">
+            <text x="248" y="118" fill="#B85600">calibrated model</text>
+            <text x="268" y="170" fill="#5B6470">says the same thing every time</text>
+          </g>
+        </svg>
+        <figcaption>When a well-calibrated model says 70%, it happens about 70% of the time. A model with no edge drifts towards the flat line.</figcaption>
+      </figure>
+      <div>
+        <h2>Honest numbers, not a backtest</h2>
+        <p class="intro">Every answer is checked against the market, so you see what the model really knows, not what a
+          backtest with hindsight suggests.</p>
+        <div class="facts">
+          <div>
+            <svg viewBox="0 0 22 22" aria-hidden="true"><circle cx="11" cy="11" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M11 6v5l3 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            <div><h3>Measured forward, in real time</h3><p>Forecasts are made before the outcome exists and labelled afterwards from mainnet prices.</p></div>
+          </div>
+          <div>
+            <svg viewBox="0 0 22 22" aria-hidden="true"><path d="M3 18 9 11l4 3 6-9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <div><h3>Skill against the base rate</h3><p>Brier and RPS skill compare the model with simply knowing how often each outcome happens.</p></div>
+          </div>
+          <div>
+            <svg viewBox="0 0 22 22" aria-hidden="true"><rect x="3" y="3" width="16" height="16" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M7 14h8M7 10h5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            <div><h3>Real execution costs</h3><p>Fees, slippage and funding are booked at the real-market price, even when the demo venue is kinder.</p></div>
+          </div>
+          <div>
+            <svg viewBox="0 0 22 22" aria-hidden="true"><path d="M4 11h14M11 4v14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="11" cy="11" r="3" fill="currentColor"/></svg>
+            <div><h3>Bring your own model</h3><p>Kairos and Jev work out of the box. Each model is scored separately, so results never mix.</p></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section safe" id="safety">
+    <div class="wrap">
+      <h2>Built to learn, not to risk your savings</h2>
+      <ol class="grid" style="list-style:none;padding:0">
+        <li><article>
+          <h3>Demo accounts only</h3>
+          <p>Orders only ever go to Bybit Demo Trading or the Bybit Testnet. Both are hard-coded, and there is no switch that
+            points the bot at live funds.</p>
+        </article></li>
+        <li><article>
+          <h3>Your keys stay on your computer</h3>
+          <p>Keys are saved in a private folder on your machine. They are never logged, never stored in the database, and the
+            app only ever shows their last four characters.</p>
+        </article></li>
+        <li><article>
+          <h3>Starts in watch mode</h3>
+          <p>The bot makes and scores forecasts without placing orders until you switch on auto-trade. A kill switch and a
+            daily loss limit stop everything at once.</p>
+        </article></li>
+      </ol>
+    </div>
+  </section>
+
+  <section class="get" id="download">
+    <div class="wrap">
+      <div class="get-card">
+        <div>
+          <h2>Install it and start watching your model work</h2>
+          <p class="intro">No Python, no terminal commands, no config files. Open the app, paste your model and Bybit Demo keys,
+            and the first forecasts arrive at the next bar close.</p>
+          <a class="dl" id="main-dl" href="https://github.com/zadescoxp/calibrain-harness/releases/latest">
+            <svg class="os" data-os-icon viewBox="0 0 24 24" aria-hidden="true"></svg>
+            <span class="txt"><b data-dl-title>Download the app</b><small data-dl-sub>Free for macOS and Windows</small></span>
+            <svg class="arrow" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v11m0 0-4.5-4.5M10 14l4.5-4.5M4 17h12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </a>
+          <p class="first-run" id="first-run"></p>
+        </div>
+        <div>
+          <ul class="platforms" id="platforms"></ul>
+          <p class="src">On Linux, or want to change the code? <a href="https://github.com/zadescoxp/calibrain-harness#quick-start">Run it from source</a>.
+            All versions are on the <a href="https://github.com/zadescoxp/calibrain-harness/releases">releases page</a>.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>Calibrain Harness is open-source research software. It trades on demo accounts only and nothing on this page is financial advice.</p>
+    <nav aria-label="Footer">
+      <a href="https://github.com/zadescoxp/calibrain-harness">GitHub</a>
+      <a href="https://github.com/zadescoxp/calibrain-harness/releases">Releases</a>
+      <a href="https://github.com/zadescoxp/calibrain-harness/blob/master/LICENSE">MIT licence</a>
+    </nav>
+  </div>
+</footer>
+
+<script>
+(() => {
+  "use strict";
+  const REPO = "zadescoxp/calibrain-harness";
+  const DL = `https://github.com/${REPO}/releases/latest/download/`;
+  const ICONS = {
+    apple: '<path fill="currentColor" d="M16.37 12.6c-.02-2.13 1.74-3.15 1.82-3.2-1-1.45-2.54-1.65-3.08-1.67-1.31-.13-2.56.77-3.23.77-.67 0-1.69-.75-2.78-.73-1.43.02-2.75.83-3.49 2.11-1.49 2.58-.38 6.4 1.07 8.5.71 1.02 1.55 2.17 2.66 2.13 1.07-.04 1.47-.69 2.76-.69 1.29 0 1.65.69 2.78.67 1.15-.02 1.88-1.04 2.58-2.07.81-1.19 1.15-2.34 1.17-2.4-.03-.01-2.24-.86-2.26-3.42ZM14.25 6.34c.59-.71.99-1.71.88-2.7-.85.03-1.88.57-2.49 1.28-.55.63-1.03 1.64-.9 2.61.95.07 1.92-.48 2.51-1.19Z"/>',
+    windows: '<path fill="currentColor" d="M3 5.6 10.4 4.6v7H3zm8.3-1.1L21 3v8.6h-9.7zM3 12.4h7.4v7L3 18.4zm8.3 0H21V21l-9.7-1.4z"/>',
+    code: '<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m8 7-5 5 5 5m8-10 5 5-5 5"/>',
+  };
+  const BUILDS = {
+    "mac-arm64": { file: "Calibrain-Harness-mac-arm64.dmg", os: "macOS", icon: "apple", title: "Download for macOS", chip: "Apple Silicon (M1 and later)", ext: ".dmg" },
+    "mac-x64": { file: "Calibrain-Harness-mac-x64.dmg", os: "macOS", icon: "apple", title: "Download for macOS", chip: "Intel Macs", ext: ".dmg" },
+    "win-x64": { file: "Calibrain-Harness-win-x64.exe", os: "Windows", icon: "windows", title: "Download for Windows", chip: "Windows 10 and 11, 64-bit", ext: ".exe" },
+  };
+  const FIRST_RUN = {
+    macOS: "<b>First launch on a Mac:</b> drag the app into Applications, then right-click it and choose Open. macOS asks once because the app isn't notarised yet.",
+    Windows: "<b>First launch on Windows:</b> if SmartScreen appears, choose More info, then Run anyway. It installs for your user only, without admin rights.",
+  };
+  let sizes = {}, version = "";
+
+  // ------------------------------------------------------------ which build fits this computer
+  async function detect() {
+    const ua = navigator.userAgent;
+    const uad = navigator.userAgentData;
+    const platform = (uad && uad.platform) || navigator.platform || "";
+    const touchMac = /Mac/.test(platform) && navigator.maxTouchPoints > 1; // iPad asking for the desktop site
+    if (/Android|iPhone|iPad|iPod/i.test(ua) || touchMac) return { key: null, mobile: true };
+    if (/Win/i.test(platform) || /Windows/i.test(ua)) return { key: "win-x64" };
+    if (/Mac/i.test(platform) || /Mac OS X/i.test(ua)) {
+      try { // Chromium browsers say it directly
+        if (uad && uad.getHighEntropyValues) {
+          const v = await uad.getHighEntropyValues(["architecture"]);
+          if (v.architecture) return { key: v.architecture.startsWith("arm") ? "mac-arm64" : "mac-x64", sure: true };
+        }
+      } catch (_) {}
+      try { // Safari and Firefox: the GPU name gives it away (Apple M-series vs Intel/AMD)
+        const gl = document.createElement("canvas").getContext("webgl");
+        const ext = gl && gl.getExtension("WEBGL_debug_renderer_info");
+        const r = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : (gl ? gl.getParameter(gl.RENDERER) : "");
+        if (/Intel|AMD|Radeon/i.test(r)) return { key: "mac-x64", sure: true };
+        if (/Apple/i.test(r)) return { key: "mac-arm64", sure: true };
+      } catch (_) {}
+      return { key: "mac-arm64" }; // most Macs sold since 2020
+    }
+    return { key: null }; // Linux and others
+  }
+
+  const mb = (k) => (sizes[BUILDS[k].file] ? `${Math.round(sizes[BUILDS[k].file] / 1048576)} MB` : "");
+
+  function render(found) {
+    const k = found.key;
+    const b = k && BUILDS[k];
+    document.querySelectorAll("[data-os-icon]").forEach((el) => (el.innerHTML = ICONS[b ? b.icon : "code"]));
+    document.querySelectorAll("[data-dl-title]").forEach((el) => (el.textContent = b ? b.title : found.mobile ? "Get it on your computer" : "Download the app"));
+    document.querySelectorAll("[data-dl-sub]").forEach((el) => {
+      el.textContent = b ? [b.chip, [mb(k), b.ext].filter(Boolean).join(" "), version].filter(Boolean).join(", ")
+                        : found.mobile ? "Available for macOS and Windows" : "macOS and Windows, or run from source";
+    });
+    const hero = document.getElementById("hero-dl"), main = document.getElementById("main-dl");
+    if (b) { hero.href = main.href = DL + b.file; hero.setAttribute("download", ""); main.setAttribute("download", ""); }
+    else { hero.href = "#download"; main.href = `https://github.com/${REPO}/releases/latest`; }
+
+    const alt = document.querySelector("[data-dl-alt]");
+    if (k === "mac-arm64") alt.innerHTML = `Using an Intel Mac? <a href="${DL + BUILDS["mac-x64"].file}">Get the Intel build</a>. Also for <a href="#download">Windows</a>.`;
+    else if (k === "mac-x64") alt.innerHTML = `On Apple Silicon? <a href="${DL + BUILDS["mac-arm64"].file}">Get that build</a>. Also for <a href="#download">Windows</a>.`;
+    else if (k === "win-x64") alt.innerHTML = `Also for <a href="#download">macOS</a>. Open source, MIT licence.`;
+    else if (found.mobile) alt.textContent = "The app runs on a Mac or Windows PC. Open this page there to download it.";
+
+    document.getElementById("first-run").innerHTML = b ? FIRST_RUN[b.os] : FIRST_RUN.macOS;
+
+    const list = document.getElementById("platforms");
+    list.innerHTML = Object.entries(BUILDS).map(([key, x]) => `
+      <li><a href="${DL + x.file}" download class="${key === k ? "mine" : ""}">
+        <svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[x.icon]}</svg>
+        <span><b>${x.os}, ${x.chip}</b><span>${[x.ext, mb(key)].filter(Boolean).join(" installer, ")}</span></span>
+        ${key === k ? "<em>Your computer</em>" : ""}
+      </a></li>`).join("");
+  }
+
+  async function init() {
+    const found = await detect();
+    render(found);
+    try { // real file sizes and version from the latest release; the page works without it
+      const r = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, { headers: { Accept: "application/vnd.github+json" } });
+      if (r.ok) {
+        const rel = await r.json();
+        version = (rel.tag_name || "").replace(/^v/, "v");
+        for (const a of rel.assets || []) sizes[a.name] = a.size;
+        render(found);
+      }
+    } catch (_) {}
+  }
+  init();
+
+  // ------------------------------------------------------------ video
+  const video = document.getElementById("video"), screen = document.getElementById("screen");
+  const play = (t) => {
+    if (typeof t === "number") video.currentTime = t;
+    screen.classList.add("playing");
+    video.play().catch(() => {});
+  };
+  document.querySelectorAll("[data-play]").forEach((b) => b.addEventListener("click", () => {
+    if (b.closest(".hero")) document.getElementById("demo").scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+    play();
+  }));
+  document.querySelectorAll(".chapters button").forEach((b) => b.addEventListener("click", () => play(Number(b.dataset.t))));
+  video.addEventListener("play", () => screen.classList.add("playing"));
+
+  // ------------------------------------------------------------ nav border once scrolled
+  const nav = document.getElementById("nav");
+  addEventListener("scroll", () => nav.classList.toggle("scrolled", scrollY > 8), { passive: true });
+
+  // ------------------------------------------------------------ the forecast ledger (an illustration, not live data)
+  const SYMS = ["BTC", "ETH", "SOL", "XRP", "DOGE", "HYPE"];
+  const QS = [
+    ["+1.0% before −0.6%", 0.34], ["−0.8% before +0.8%", 0.5], ["closes higher in 2 h", 0.52],
+    ["moves at least one stop", 0.41], ["+0.6% before −1.0%", 0.6], ["funding flips negative", 0.3],
+  ];
+  const rows = document.getElementById("rows");
+  const st = { n: 0, hits: 0, brier: 0, brierBase: 0 };
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const pct = (x) => `${Math.round(x * 100)}%`;
+  const rnd = (a, b) => a + Math.random() * (b - a);
+
+  function forecast() {
+    const [q, base] = QS[Math.floor(Math.random() * QS.length)];
+    // a model with some real skill: its probability leans towards the outcome that will happen
+    const truth = Math.random() < base;
+    const p = Math.min(0.93, Math.max(0.07, base + (truth ? 1 : -1) * rnd(0.04, 0.26) + rnd(-0.08, 0.08)));
+    return { sym: SYMS[Math.floor(Math.random() * SYMS.length)], q, base, p, truth };
+  }
+  function rowEl(f, pending) {
+    const li = document.createElement("li");
+    li.className = "row" + (pending ? " pending" : "");
+    li.innerHTML = `<span class="sym">${f.sym}</span>
+      <span class="q">${f.q}<span class="bar"><i style="width:${pct(f.p)}"></i></span></span>
+      <span class="res"><span class="p">${pct(f.p)}</span><span class="o">${pending ? "waiting" : ""}</span></span>`;
+    if (!pending) settle(li, f, false);
+    return li;
+  }
+  function settle(li, f, count = true) {
+    const o = li.querySelector(".o");
+    o.textContent = f.truth ? "happened" : "didn't happen";
+    o.className = "o " + (f.truth ? "hit" : "miss");
+    li.classList.remove("pending");
+    if (!count) return;
+    st.n++; st.hits += f.truth ? 1 : 0;
+    st.brier += (f.p - (f.truth ? 1 : 0)) ** 2; st.brierBase += (f.base - (f.truth ? 1 : 0)) ** 2;
+    document.getElementById("s-n").textContent = st.n;
+    document.getElementById("s-hit").textContent = pct(st.hits / st.n);
+    const skill = 1 - st.brier / st.brierBase;
+    document.getElementById("s-skill").textContent = (skill >= 0 ? "+" : "−") + Math.abs(skill * 100).toFixed(1) + "%";
+  }
+  function tick() {
+    const f = forecast();
+    const li = rowEl(f, true);
+    li.classList.add("enter");
+    rows.prepend(li);
+    while (rows.children.length > 6) rows.lastElementChild.remove();
+    setTimeout(() => settle(li, f), 1600);
+  }
+  if (reduce) {
+    for (let i = 0; i < 6; i++) { const f = forecast(); rows.append(rowEl(f, false)); settle(rows.lastElementChild, f); }
+  } else {
+    for (let i = 0; i < 5; i++) { const f = forecast(); const li = rowEl(f, true); rows.append(li); settle(li, f); }
+    tick();
+    let timer = setInterval(tick, 2600);
+    document.addEventListener("visibilitychange", () => { clearInterval(timer); if (!document.hidden) timer = setInterval(tick, 2600); });
+  }
+})();
+</script>
+</body>
+</html>
