@@ -1,4 +1,4 @@
-"""Bybit testnet private WebSocket: position, execution, order and wallet pushes.
+"""Bybit private WebSocket (testnet or Demo Trading): position, execution, order and wallet pushes.
 
 Polling every 5 s means a stop that fires is noticed up to 5 s late and the dashboard shows a
 stale account. The private stream tells us within milliseconds, so closes are recorded as soon as
@@ -17,7 +17,9 @@ from typing import Any, Awaitable, Callable
 
 import aiohttp
 
-TESTNET_PRIVATE_WS = "wss://stream-testnet.bybit.com/v5/private"
+from . import venue as venue_mod
+
+TESTNET_PRIVATE_WS = venue_mod.VENUES["testnet"].private_ws
 TOPICS = ["position.linear", "execution.linear", "order.linear", "wallet"]
 
 log = logging.getLogger("ctb.private_ws")
@@ -26,7 +28,9 @@ Handler = Callable[[str, list[dict[str, Any]]], Awaitable[None]]
 
 
 class BybitPrivateStream:
-    def __init__(self, api_key: str, api_secret: str, session: aiohttp.ClientSession, on_message: Handler):
+    def __init__(self, api_key: str, api_secret: str, session: aiohttp.ClientSession, on_message: Handler,
+                 venue: str = "testnet"):
+        self.url = venue_mod.get(venue).private_ws
         self._key = api_key
         self._secret = api_secret.encode()
         self._session = session
@@ -48,7 +52,7 @@ class BybitPrivateStream:
         backoff = 1.0
         while not self._stop:
             try:
-                async with self._session.ws_connect(TESTNET_PRIVATE_WS, heartbeat=None, timeout=aiohttp.ClientWSTimeout(ws_close=10)) as ws:
+                async with self._session.ws_connect(self.url, heartbeat=None, timeout=aiohttp.ClientWSTimeout(ws_close=10)) as ws:
                     await ws.send_json({"op": "auth", "args": self._auth_args()})
                     auth = await ws.receive_json(timeout=10)
                     if not auth.get("success"):
