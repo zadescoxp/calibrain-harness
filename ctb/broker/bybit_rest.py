@@ -1,7 +1,9 @@
-"""Minimal signed Bybit v5 REST client for USDT linear perpetuals. TESTNET ONLY.
+"""Minimal signed Bybit v5 REST client for USDT linear perpetuals. PAPER MONEY ONLY.
 
-The host is hard-coded to api-testnet.bybit.com. There is deliberately no switch to mainnet:
-pointing this bot at real money would need a code change and a review, not an env flag.
+Signed requests go only to a host in venue.PRIVATE_HOSTS (Bybit testnet or Bybit Demo Trading).
+There is deliberately no real-money venue: adding one would need a code change and a review, not
+an env flag. Public market data (instruments, tickers, order book, server time) is fetched unsigned
+from the venue's public host, which for Demo Trading is the mainnet public API: no key is sent there.
 """
 
 from __future__ import annotations
@@ -16,7 +18,9 @@ from typing import Any
 
 import aiohttp
 
-TESTNET_HOST = "https://api-testnet.bybit.com"
+from . import venue as venue_mod
+
+TESTNET_HOST = venue_mod.VENUES["testnet"].private_rest
 RECV_WINDOW = "10000"
 
 
@@ -28,22 +32,52 @@ class BybitError(Exception):
         self.path = path
 
 
-class BybitTestnet:
-    def __init__(self, api_key: str, api_secret: str, session: aiohttp.ClientSession):
+class BybitClient:
+    def __init__(self, api_key: str, api_secret: str, session: aiohttp.ClientSession, venue: str = "testnet"):
+        self.venue = venue_mod.get(venue)
         if not api_key or not api_secret:
-            raise ValueError("BYBIT_API_KEY / BYBIT_API_SECRET (testnet) are required")
+            raise ValueError(f"BYBIT_API_KEY / BYBIT_API_SECRET ({self.venue.name}) are required")
+        if self.venue.private_rest not in venue_mod.PRIVATE_HOSTS:
+            raise ValueError(f"refusing to sign requests for {self.venue.private_rest}")
         self._key = api_key
         self._secret = api_secret.encode()
         self._session = session
-        self.host = TESTNET_HOST
+        self.host = self.venue.private_rest
+        self.public_host = self.venue.public_rest
         self._time_offset_ms = 0
 
     # ------------------------------------------------------------------ transport
     async def sync_time(self) -> None:
-        async with self._session.get(f"{self.host}/v5/market/time", timeout=aiohttp.ClientTimeout(total=10)) as r:
-            data = await r.json(content_type=None)
-        server_ms = int(data["result"]["timeNano"]) // 1_000_000
+        # the clock that checks our signature is the private host's
+        try:
+            async with self._session.get(f"{self.host}/v5/market/time", timeout=aiohttp.ClientTimeout(total=10)) as r:
+                data = await r.json(content_type=None)
+            server_ms = int(data["result"]["timeNano"]) // 1_000_000
+        except (aiohttp.ClientError, asyncio.TimeoutError, KeyError, TypeError, ValueError):
+            # the demo domain is not documented to serve market endpoints; Bybit's clocks are shared
+            server_ms = int((await self._public("/v5/market/time", {}))["timeNano"]) // 1_000_000
         self._time_offset_ms = server_ms - int(time.time() * 1000)
+
+    async def _public(self, path: str, params: dict[str, Any], *, retries: int = 2) -> dict[str, Any]:
+        """Unsigned GET on the venue's public market-data host."""
+        params = {k: v for k, v in params.items() if v is not None}
+        for attempt in range(retries + 1):
+            try:
+                async with self._session.get(f"{self.public_host}{path}", params=params, timeout=aiohttp.ClientTimeout(total=15)) as r:
+                    data = await r.json(content_type=None)
+            except (aiohttp.ClientError, asyncio.TimeoutError):
+                if attempt < retries:
+                    await asyncio.sleep(0.5 * (attempt + 1))
+                    continue
+                raise
+            code = int((data or {}).get("retCode", -1))
+            if code == 10006 and attempt < retries:
+                await asyncio.sleep(1.0 * (attempt + 1))
+                continue
+            if code != 0:
+                raise BybitError(code, str((data or {}).get("retMsg")), path)
+            return data.get("result") or {}
+        raise BybitError(-1, "retries exhausted", path)
 
     def _sign(self, ts: str, payload: str) -> str:
         msg = f"{ts}{self._key}{RECV_WINDOW}{payload}".encode()
@@ -75,7 +109,8 @@ class BybitTestnet:
                         data = None
                 if not isinstance(data, dict):
                     # Bybit answers an unknown/invalid key with a bare HTTP 401 and no body.
-                    msg = "invalid API key, or a mainnet key used on testnet" if status in (401, 403) else f"HTTP {status} with no JSON body"
+                    msg = (f"invalid API key, or a key from another environment used on {self.venue.name}"
+                           if status in (401, 403) else f"HTTP {status} with no JSON body")
                     raise BybitError(10003 if status in (401, 403) else -status, msg, path)
             except (aiohttp.ClientError, asyncio.TimeoutError):
                 if attempt < retries and method == "GET":
@@ -94,11 +129,11 @@ class BybitTestnet:
             return data.get("result") or {}
         raise BybitError(-1, "retries exhausted", path)
 
-    # ------------------------------------------------------------------ public (testnet)
+    # ------------------------------------------------------------------ public (venue market data)
     async def instruments(self, symbols: list[str]) -> dict[str, dict[str, Any]]:
         out: dict[str, dict[str, Any]] = {}
         for sym in symbols:
-            res = await self._request("GET", "/v5/market/instruments-info", {"category": "linear", "symbol": sym})
+            res = await self._public("/v5/market/instruments-info", {"category": "linear", "symbol": sym})
             for item in res.get("list", []):
                 lot, price = item["lotSizeFilter"], item["priceFilter"]
                 out[sym] = {
@@ -112,15 +147,30 @@ class BybitTestnet:
         return out
 
     async def ticker(self, symbol: str) -> dict[str, Any]:
-        res = await self._request("GET", "/v5/market/tickers", {"category": "linear", "symbol": symbol})
+        res = await self._public("/v5/market/tickers", {"category": "linear", "symbol": symbol})
         return res["list"][0]
 
     async def orderbook(self, symbol: str, depth: int = 50) -> dict[str, list[tuple[float, float]]]:
-        """Testnet book, best first: {"bids": [(price, size), ...], "asks": [...]}. Sizing and the
-        entry price cap are computed from this, because testnet depth is far thinner than mainnet."""
-        res = await self._request("GET", "/v5/market/orderbook", {"category": "linear", "symbol": symbol, "limit": depth})
+        """The venue's book, best first: {"bids": [(price, size), ...], "asks": [...]}. Sizing and the
+        entry price cap are computed from this (testnet depth is far thinner than mainnet; on Demo
+        Trading this IS the mainnet book, which the cost-realism layer also walks)."""
+        res = await self._public("/v5/market/orderbook", {"category": "linear", "symbol": symbol, "limit": depth})
         return {"bids": [(float(p), float(q)) for p, q in res.get("b", [])],
                 "asks": [(float(p), float(q)) for p, q in res.get("a", [])]}
+
+    async def recent_trades(self, symbol: str, limit: int = 1000) -> list[dict[str, Any]]:
+        res = await self._public("/v5/market/recent-trade", {"category": "linear", "symbol": symbol, "limit": limit})
+        return res.get("list", [])
+
+    async def klines_1m(self, symbol: str, start_ms: int, end_ms: int) -> list[list[Any]]:
+        res = await self._public("/v5/market/kline", {"category": "linear", "symbol": symbol, "interval": "1",
+                                                      "start": start_ms, "end": end_ms, "limit": 1000})
+        return res.get("list", [])
+
+    async def funding_history(self, symbol: str, start_ms: int, end_ms: int) -> list[dict[str, Any]]:
+        res = await self._public("/v5/market/funding/history", {"category": "linear", "symbol": symbol,
+                                                                "startTime": start_ms, "endTime": end_ms, "limit": 200})
+        return res.get("list", [])
 
     # ------------------------------------------------------------------ account
     async def wallet(self) -> dict[str, Any]:
@@ -243,3 +293,6 @@ class BybitTestnet:
     async def cancel_all(self, symbol: str | None = None) -> None:
         params = {"category": "linear", "symbol": symbol} if symbol else {"category": "linear", "settleCoin": "USDT"}
         await self._request("POST", "/v5/order/cancel-all", params)
+
+
+BybitTestnet = BybitClient  # old name, kept for scripts and tests
