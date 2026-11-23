@@ -1,0 +1,107 @@
+# Desktop installers: macOS .dmg/.zip (arm64 + x64) and a Windows NSIS .exe.
+# Runs on a v* tag (and publishes a GitHub release with the installers) or by hand (Actions -> Desktop -> Run workflow). Builds are unsigned unless the
+# signing secrets below exist; see README "Desktop app" for code signing and notarization.
+name: Desktop
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # publish a release with the installers on tags
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-15, target: --mac, arch: --arm64, name: macos-arm64 }
+          - { os: macos-15-intel, target: --mac, arch: --x64, name: macos-x64 }
+          - { os: windows-latest, target: --win, arch: --x64, name: windows-x64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            web-next/package-lock.json
+            desktop/package-lock.json
+
+      - name: Backend tests
+        run: |
+          python -m pip install -r requirements.txt
+          python -m pytest -q
+
+      - name: Build UI (web-next static export)
+        run: |
+          npm ci --prefix web-next
+          npm run build --prefix web-next
+
+      - name: Freeze backend (PyInstaller)
+        working-directory: desktop
+        env:
+          PYTHON: python
+        run: |
+          npm ci
+          node scripts/build-backend.mjs
+
+      - name: Package installer
+        working-directory: desktop
+        env:
+          # macOS signing + notarization: all optional. Without them the app is ad-hoc signed.
+          CSC_LINK: ${{ secrets.MAC_CERT_P12_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Windows Authenticode: optional
+          WIN_CSC_LINK: ${{ secrets.WIN_CERT_PFX_BASE64 }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CERT_PASSWORD }}
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        shell: bash
+        run: |
+          # electron-builder treats an empty CSC_LINK as "sign with nothing" and fails: drop empty secrets
+          for v in CSC_LINK CSC_KEY_PASSWORD WIN_CSC_LINK WIN_CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            [ -z "${!v}" ] && unset "$v"
+          done
+          npx electron-builder ${{ matrix.target }} ${{ matrix.arch }} --publish never
+
+      - name: Smoke test the frozen backend
+        working-directory: desktop
+        shell: bash
+        run: node scripts/smoke-backend.mjs
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: calibrain-harness-${{ matrix.name }}
+          if-no-files-found: error
+          path: |
+            desktop/dist/*.dmg
+            desktop/dist/*.zip
+            desktop/dist/*.exe
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      # stable file names (no version), so README links to releases/latest/download/<file> never go stale
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          make_latest: true
+          generate_release_notes: true
+          files: out/*
