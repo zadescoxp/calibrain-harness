@@ -304,3 +304,28 @@ dialog.keys { width: min(640px, 95vw); }
 dialog.strat { width: min(980px, 96vw); }
 dialog.strat input { background: var(--bar); color: var(--text); border: 1px solid var(--line); padding: 2px 6px; width: 140px; }
 dialog.strat .seg button { padding: 1px 7px; }
+
+/* run picker (TRADES) */
+.runpick { position: relative; display: flex; align-items: stretch; gap: 0; border-top: 0; min-height: 34px; }
+.rp-btn { display: flex; align-items: center; gap: 8px; background: #000; color: var(--text); border: 0; border-right: 1px solid var(--line); padding: 0 10px; font: 12px var(--mono); cursor: pointer; min-width: 300px; max-width: 420px; text-align: left; flex: none; }
+.rp-btn:hover, .rp-btn.open { background: var(--bar); }
+.rp-btn .rp-setup { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+.rp-caret { color: var(--amber); margin-left: auto; }
+.rp-stats { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 18px; padding: 4px 10px; min-width: 0; flex: 1; }
+.rp-stat { display: flex; flex-direction: column; line-height: 1.2; white-space: nowrap; }
+.rp-stat span { color: var(--amber-dim); font: 500 10px var(--cond); text-transform: uppercase; letter-spacing: .05em; }
+.rp-stat b { font: 500 12px var(--mono); }
+.rp-menu { position: absolute; top: 100%; left: 0; z-index: 40; width: min(560px, 100%); max-height: 60vh; overflow: auto; background: #050505; border: 1px solid var(--amber-dim); box-shadow: 0 8px 24px #000c; }
+.rp-item { display: block; width: 100%; text-align: left; background: transparent; border: 0; border-bottom: 1px solid var(--line); padding: 5px 10px; color: var(--text); font: 12px var(--mono); cursor: pointer; }
+.rp-item:hover { background: var(--bar); }
+.rp-item.on { background: #2b1a05; }
+.rp-l1 { display: flex; align-items: center; gap: 8px; }
+.rp-l1 .rp-setup { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rp-l2 { display: flex; flex-wrap: wrap; gap: 0 14px; color: var(--muted); font-size: 11px; margin-top: 2px; }
+@media (max-width: 700px) { .runpick { flex-direction: column; } .rp-btn { max-width: none; min-height: 30px; border-right: 0; border-bottom: 1px solid var(--line); } }
+.rp-l1 > b, .rp-l1 > .tag, .rp-btn > b, .rp-btn > .tag { flex: none; white-space: nowrap; }
+.rp-l1 .rp-setup { min-width: 0; flex: 1; }
+
+/* desktop app / narrow windows: the scrolling function-key row gets a hairline scrollbar, not a grey slab */
+.fkeys { scrollbar-width: thin; scrollbar-color: #2a2a2a transparent; }
+.fkeys::-webkit-scrollbar { height: 3px; }
