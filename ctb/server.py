@@ -14,7 +14,8 @@ from typing import Any
 from aiohttp import web
 
 from .broker.bybit_rest import BybitError
-from .config import ROOT, TF_PROFILES, key_hint, load_settings, save_env
+from .config import (HOME, ROOT, TF_PROFILES, config_env, config_view, key_hint, load_settings, parse_config,
+                     save_env)
 from .engine import Engine
 from .evaluation import metrics as metrics_mod
 from .evaluation import report as report_mod
@@ -23,9 +24,10 @@ from .market.store import TIMEFRAMES
 from . import models as models_mod
 from . import runs as runs_mod
 from . import universe as universe_mod
+from .broker.venue import VENUES
 
 log = logging.getLogger("ctb.server")
-NEXT_OUT = ROOT / "web-next" / "out"
+NEXT_OUT = Path(os.environ["CTB_UI_DIR"]) if os.environ.get("CTB_UI_DIR") else ROOT / "web-next" / "out"
 UI_NOT_BUILT = """<!doctype html><meta charset="utf-8"><title>Calibrain Harness</title>
 <body style="background:#000;color:#ddd;font:15px/1.6 ui-monospace,Menlo,monospace;padding:48px;max-width:720px">
 <h2 style="color:#ff9a2e;font-weight:600">The Calibrain Harness UI is not built yet</h2>
@@ -80,12 +82,18 @@ def make_app(engine: Engine) -> web.Application:
     s = engine.s
     app = web.Application(middlewares=[dev_cors, same_origin_only])
     routes = web.RouteTableDef()
+    open_sockets: set[web.WebSocketResponse] = set()
 
     @routes.get("/")
     async def index(_: web.Request) -> web.StreamResponse:
         if (NEXT_OUT / "index.html").exists():
             return web.FileResponse(NEXT_OUT / "index.html")
         return web.Response(status=503, content_type="text/html", text=UI_NOT_BUILT)
+
+    @routes.get("/api/health")
+    async def health(_: web.Request) -> web.Response:
+        """Liveness probe for the desktop app (also tells it this port is really ours)."""
+        return j({"ok": True, "app": "calibrain-harness", "pid": os.getpid()})
 
     @routes.get("/api/overview")
     async def overview(_: web.Request) -> web.Response:
@@ -105,7 +113,7 @@ def make_app(engine: Engine) -> web.Application:
                        "budget_per_hour": engine.budget.per_hour, "news_requests_last_hour": engine.news_budget.used(),
                        "last_error": engine.last_decision_error, "probe_rate": engine.probe_rate, "inflight": sorted(engine.inflight)},
             "account": ex.account_view() if ex else None,
-            "executor_error": (ex.sync_error if ex else "no Bybit testnet keys configured"),
+            "executor_error": (ex.sync_error if ex else f"no Bybit {s.venue} keys configured"),
             "labelled_total": (engine.db.one("SELECT COUNT(*) n FROM decisions WHERE label_json IS NOT NULL") or {}).get("n", 0),
         })
 
@@ -253,7 +261,7 @@ def make_app(engine: Engine) -> web.Application:
         m = await asyncio.to_thread(metrics_mod.compute, engine.db, model=req.query.get("model") or None, run_id=run)
         m["validation"] = await asyncio.to_thread(validation_mod.compute, engine.db, run_id=run, model=req.query.get("model") or None)
         md = report_mod.render(m, s.public_view())
-        out = ROOT / "data" / "kairos_report.md"
+        out = s.db_path.parent / "kairos_report.md"
         out.write_text(md, encoding="utf-8")
         return web.Response(text=md, content_type="text/markdown")
 
@@ -263,13 +271,13 @@ def make_app(engine: Engine) -> web.Application:
         body = await req.json()
         enabled = bool(body.get("enabled"))
         if enabled and not engine.executor:
-            return j({"error": "no Bybit testnet keys configured"}, 400)
+            return j({"error": f"no Bybit {s.venue} keys configured"}, 400)
         if enabled and engine.executor and engine.executor.halted_reason:
             if not body.get("clear_halt"):
                 return j({"error": f"halted: {engine.executor.halted_reason}. Send clear_halt=true to resume."}, 409)
             engine.executor.halted_reason = None
         s.trading_enabled = enabled
-        engine.emit("event", engine.db.event("warn", "trading_toggled", f"testnet trading {'ENABLED' if enabled else 'disabled'} from dashboard"))
+        engine.emit("event", engine.db.event("warn", "trading_toggled", f"{s.venue} trading {'ENABLED' if enabled else 'disabled'} from dashboard"))
         return j({"trading_enabled": s.trading_enabled})
 
     @routes.post("/api/close")
@@ -334,17 +342,83 @@ def make_app(engine: Engine) -> web.Application:
             if not 1 <= n <= 50:
                 return j({"error": "max_positions must be between 1 and 50"}, 400)
             body["max_positions"] = n
+        try:  # same bounds as the CONFIG dialog
+            parse_config(s, {k: body[k] for k in allowed if k in body and k != "exploration_mode"})
+        except ValueError as exc:
+            return j({"error": str(exc)}, 400)
         for k, typ in allowed.items():
             if k in body:
                 setattr(s, k, typ(body[k]))
-        if "max_positions" in body:
-            save_env({"CTB_MAX_POSITIONS": str(s.max_positions)})  # survives restarts; open positions untouched
-        if "exploration_mode" in body:
-            save_env({"CTB_EXPLORATION": "1" if s.exploration_mode else "0"})  # survives restarts
+        # everything changed here survives restarts (open positions untouched)
+        save_env({**config_env({k: getattr(s, k) for k in allowed if k in body and k != "exploration_mode"}),
+                  **({"CTB_EXPLORATION": "1" if s.exploration_mode else "0"} if "exploration_mode" in body else {})})
         if "probe_rate" in body:
             engine.probe_rate = max(0.0, min(float(body["probe_rate"]), 0.5))
         engine.emit("event", engine.db.event("info", "settings", f"settings updated: { {k: body[k] for k in body if k in allowed or k == 'probe_rate'} }"))
         return j(s.public_view())
+
+    # ---------------------------------------------------------------- every other setting (CONFIG dialog)
+    def restart(resume: bool) -> None:
+        overrides = {"CTB_TRADING_ENABLED": os.environ.get("CTB_TRADING_ENABLED", "")}
+        if resume:
+            overrides["CTB_RESUME_TRADING"] = "1"  # a restart we asked for must not silently stop the test
+
+        def reexec() -> None:
+            if SUPERVISED:
+                # the desktop app owns this process: stop cleanly and let it start us again (execve is
+                # not a real exec on Windows, and the app must keep tracking the backend's PID)
+                RESTART_ENV.write_text(json.dumps(overrides), encoding="utf-8")
+                os.chmod(RESTART_ENV, 0o600)
+                _request_exit(RESTART_EXIT_CODE)
+                return
+            env = {**os.environ, **{k: v for k, v in overrides.items() if v}}
+            argv = [sys.executable] if getattr(sys, "frozen", False) else [sys.executable, "-m", "ctb.server"]
+            os.execve(sys.executable, argv, env)
+        asyncio.get_running_loop().call_later(1.0, reexec)
+
+    @routes.get("/api/config")
+    async def config_get(_: web.Request) -> web.Response:
+        return j(config_view(s))
+
+    @routes.post("/api/config")
+    async def config_set(req: web.Request) -> web.Response:
+        """Validate, apply and save settings. Most apply at once (new entries and the next decision use
+        them); a venue switch needs that venue's keys, no open bot trades, and restarts the service."""
+        body = await req.json()
+        try:
+            ch = parse_config(s, body if isinstance(body, dict) else {})
+        except ValueError as exc:
+            return j({"error": str(exc)}, 400)
+        if not ch:
+            return j({**config_view(s), "unchanged": True})
+        if "venue" in ch:
+            target = ch["venue"]
+            if engine.db.one("SELECT id FROM trades WHERE status IN ('open','opening') LIMIT 1"):
+                return j({"error": f"the bot has open trades on {s.venue}; close them (or use KILL) before switching venue"}, 409)
+            if not all(s.bybit_keys.get(target, ("", ""))):
+                return j({"error": f"no Bybit {target} keys saved yet; add them in KEYS first"}, 409)
+        for k, v in ch.items():
+            setattr(s, k, v)
+        save_env(config_env(ch))
+        # live objects that copied a setting at start-up
+        if "kairos_max_requests_per_hour" in ch:
+            engine.budget.per_hour = ch["kairos_max_requests_per_hour"]
+        if "kairos_news_max_per_hour" in ch:
+            engine.news_budget.per_hour = ch["kairos_news_max_per_hour"]
+        if "kairos_concurrency" in ch:
+            engine.kairos_sem = asyncio.Semaphore(ch["kairos_concurrency"])
+        if "max_leverage" in ch and engine.executor:
+            engine.executor._lev_set.clear()  # re-set on each symbol's next entry
+        if "cost_realism" in ch:
+            engine.costs.refresh(force=True)
+        engine.emit("event", engine.db.event("warn" if "venue" in ch else "info", "settings",
+                                             f"settings updated from CONFIG: {ch}" + ("; restarting on the new venue (auto-trade off)" if "venue" in ch else "")))
+        if "venue" in ch:
+            s.trading_enabled = False  # a different account starts observe-only
+            os.environ["CTB_TRADING_ENABLED"] = "0"
+            restart(resume=False)
+            return j({**config_view(s), "restarting": True})
+        return j(config_view(s))
 
     # ---------------------------------------------------------------- terminal panels
     @routes.get("/api/monitor")
@@ -407,25 +481,34 @@ def make_app(engine: Engine) -> web.Application:
     @routes.get("/api/keys")
     async def keys_status(_: web.Request) -> web.Response:
         return j({
+            "storage": "project" if HOME == ROOT else "app",  # where .env lives (no path: the browser needs no more)
             "kairos": {**key_hint(s.kairos_api_key), "base_url": s.kairos_base_url},
             "jev": {**key_hint(models_mod.MODELS["jev"].api_key), "base_url": models_mod.MODELS["jev"].base_url,
                     "model_id": models_mod.MODELS["jev"].model},
             "active_model": s.model_provider,
             "bybit": {"api_key": key_hint(s.bybit_api_key), "api_secret": key_hint(s.bybit_api_secret),
                       "connected": bool(engine.executor and not engine.executor.sync_error),
-                      "error": engine.executor.sync_error if engine.executor else None},
+                      "error": engine.executor.sync_error if engine.executor else None, "venue": s.venue},
+            "bybit_venues": {v: {"label": vs.label, "keys_url": vs.keys_url, "active": v == s.venue,
+                                 "api_key": key_hint(s.bybit_keys.get(v, ("", ""))[0]),
+                                 "api_secret": key_hint(s.bybit_keys.get(v, ("", ""))[1])} for v, vs in VENUES.items()},
         })
 
     @routes.post("/api/keys/bybit")
     async def keys_bybit(req: web.Request) -> web.Response:
         body = await req.json()
         key, secret = str(body.get("api_key", "")).strip(), str(body.get("api_secret", "")).strip()
+        venue = str(body.get("venue") or s.venue).strip().lower()
+        if venue not in VENUES:
+            return j({"error": f"venue must be one of {', '.join(VENUES)}"}, 400)
         if not key or not secret:
             return j({"error": "both API key and secret are required"}, 400)
         try:
-            return j(await engine.set_bybit_keys(key, secret))
+            return j(await engine.set_bybit_keys(key, secret, venue))
         except BybitError as exc:
-            hint = " (10003 = key not valid on TESTNET; create it at testnet.bybit.com)" if exc.ret_code in (10003, 10004, 33004) else ""
+            vs = VENUES[venue]
+            hint = (f" (10003 = key not valid on Bybit {venue.upper()}; create it at {vs.keys_url}"
+                    + (" after switching to Demo Trading" if venue == "demo" else "") + ")") if exc.ret_code in (10003, 10004, 33004) else ""
             return j({"error": f"Bybit rejected the keys: {exc.ret_code} {exc.ret_msg}{hint}"}, 400)
         except ValueError as exc:
             return j({"error": str(exc)}, 409)
@@ -488,7 +571,8 @@ def make_app(engine: Engine) -> web.Application:
     # ---------------------------------------------------------------- symbol universe
     @routes.get("/api/universe")
     async def universe(_: web.Request) -> web.Response:
-        cands = await universe_mod.candidates(engine.session, engine.store.context.get("universe_all", []), s.symbols, s.max_notional_usdt)
+        cands = await universe_mod.candidates(engine.session, engine.store.context.get("universe_all", []), s.symbols, s.max_notional_usdt,
+                                              s.venue_spec.public_rest)
         per_sym = s.required_rph(probe_rate=engine.probe_rate) / max(1, len(s.symbols))
         return j({"selected": s.symbols, "candidates": cands, "max_symbols": universe_mod.MAX_SYMBOLS,
                   "budget_per_hour": s.kairos_max_requests_per_hour, "rph_per_symbol": round(per_sym, 2),
@@ -501,7 +585,7 @@ def make_app(engine: Engine) -> web.Application:
         every feed, stream, store and instrument filter is rebuilt for the new list."""
         body = await req.json()
         syms = [str(x).strip().upper() for x in body.get("symbols") or []]
-        errs = await universe_mod.validate(engine.session, syms)
+        errs = await universe_mod.validate(engine.session, syms, s.venue_spec.public_rest, s.venue)
         if errs:
             return j({"error": "; ".join(errs)}, 400)
         open_syms = {r["symbol"] for r in engine.db.query("SELECT symbol FROM trades WHERE status IN ('open','opening')")}
@@ -520,14 +604,7 @@ def make_app(engine: Engine) -> web.Application:
         resume = bool(s.trading_enabled)
         engine.emit("event", engine.db.event("warn", "symbols", f"universe set to {len(syms)} symbols ({', '.join(syms)}); "
                                              f"~{need} Kairos req/h; restarting{' (auto-trade resumes)' if resume else ''}"))
-
-        def reexec() -> None:
-            env = dict(os.environ)
-            if resume:
-                env["CTB_RESUME_TRADING"] = "1"  # a restart we asked for must not silently stop the test
-            os.execve(sys.executable, [sys.executable, "-m", "ctb.server"], env)
-
-        asyncio.get_running_loop().call_later(1.0, reexec)
+        restart(resume)
         return j({"ok": True, "symbols": syms, "need_rph": need, "restarting": True})
 
     @routes.get("/ws")
@@ -540,6 +617,7 @@ def make_app(engine: Engine) -> web.Application:
             raise web.HTTPForbidden(text="cross-origin websocket refused")
         ws = web.WebSocketResponse(heartbeat=20, compress=True)
         await ws.prepare(req)
+        open_sockets.add(ws)
         q: asyncio.Queue = asyncio.Queue()
         engine.subscribers.add(q)
         watch = {"symbol": s.symbols[0], "tf": "5"}
@@ -600,6 +678,7 @@ def make_app(engine: Engine) -> web.Application:
             for t in tasks:
                 t.cancel()
             engine.subscribers.discard(q)
+            open_sockets.discard(ws)
         return ws
 
     # The UI is the Next.js static export (web-next/out), served on the same origin as the API.
@@ -623,26 +702,86 @@ def make_app(engine: Engine) -> web.Application:
     app.router.add_get(r"/{name:[A-Za-z0-9_.-]+\.(?:ico|svg|png|webmanifest|txt)}", root_asset)
 
     async def on_startup(_: web.Application) -> None:
+        global _loop
+        _loop = asyncio.get_running_loop()
         await engine.start()
 
     async def on_cleanup(_: web.Application) -> None:
         await engine.stop()
 
+    async def on_shutdown(_: web.Application) -> None:
+        # close live sockets so a stop (restart, quit) does not wait out the shutdown timeout
+        await asyncio.gather(*(ws.close(code=1001, message=b"server shutdown") for ws in list(open_sockets)),
+                             return_exceptions=True)
+
     app.on_startup.append(on_startup)
+    app.on_shutdown.append(on_shutdown)
     app.on_cleanup.append(on_cleanup)
     return app
 
 
+# ---------------------------------------------------------------- desktop-app supervision
+# CTB_SUPERVISED=1: started by the desktop app. A restart exits with RESTART_EXIT_CODE (the app starts
+# us again) and stdin is a lifeline: when the app goes away, for any reason, the pipe closes and we shut down.
+SUPERVISED = os.environ.get("CTB_SUPERVISED") == "1"
+RESTART_EXIT_CODE = 75
+RESTART_ENV = HOME / ".restart-env.json"  # read back by ctb.config at import
+_loop: asyncio.AbstractEventLoop | None = None
+_exit_code = 0
+
+
+def _request_exit(code: int = 0) -> None:
+    """Graceful stop from any thread: run_app catches GracefulExit and runs the cleanup hooks."""
+    global _exit_code
+    _exit_code = code
+
+    def _raise() -> None:
+        raise web.GracefulExit()
+    if _loop is not None:
+        _loop.call_soon_threadsafe(_raise)
+    else:
+        os._exit(code)
+
+
+def _stdin_lifeline() -> None:
+    import threading
+
+    def watch() -> None:
+        try:
+            fd = sys.stdin.fileno()  # raw reads: a thread blocked in the buffered reader aborts interpreter exit
+            while os.read(fd, 4096):
+                pass
+        except Exception:
+            pass
+        log.info("desktop app gone (stdin closed); shutting down")
+        _request_exit(0)
+        time.sleep(15)  # cleanup hung: do not linger as an orphan
+        os._exit(0)
+    threading.Thread(target=watch, name="lifeline", daemon=True).start()
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    if SUPERVISED:
+        if sys.stdin is not None:
+            _stdin_lifeline()
     s = load_settings()
     if os.environ.pop("CTB_RESUME_TRADING", None) == "1":
         s.trading_enabled = True  # restart requested by the symbol picker while auto-trade was on
     engine = Engine(s)
-    print(f"Calibrain Harness: http://{s.host}:{s.port}  (venue: Bybit TESTNET, "
+    print(f"Calibrain Harness: http://{s.host}:{s.port}  (venue: {s.venue_spec.label}{' + cost realism' if s.shadow_costs else ''}, "
           f"model {s.model_spec.label} ({s.model_spec.model}) key {'set' if s.model_spec.api_key else 'NOT set'}, "
           f"trading {'ON' if s.trading_enabled else 'observe-only'})")
-    web.run_app(make_app(engine), host=s.host, port=s.port, print=None)
+    # supervised: open /ws sockets would otherwise hold a graceful stop for aiohttp's 60 s default, and the
+    # per-request access log only bloats the app's log file
+    extra = {"shutdown_timeout": 3, "access_log": None} if SUPERVISED else {}
+    web.run_app(make_app(engine), host=s.host, port=s.port, print=None, **extra)
+    if SUPERVISED:
+        # cleanup already ran; skip interpreter teardown (the lifeline thread may still be blocked on stdin)
+        logging.shutdown()
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(_exit_code)
 
 
 if __name__ == "__main__":
