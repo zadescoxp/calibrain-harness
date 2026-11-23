@@ -339,7 +339,7 @@ function buildMenu() {
 function showAbout() {
   dialog.showMessageBox(win, {
     type: "info", title: APP_TITLE, message: `${APP_TITLE} ${app.getVersion()}`,
-    detail: `Paper-money research terminal: orders only go to Bybit Demo Trading or Bybit Testnet.\n\nData and keys: ${HOME}\nEngine: 127.0.0.1:${port}`,
+    detail: `Research terminal on demo accounts: orders only go to Bybit Demo Trading or Bybit Testnet.\n\nData and keys: ${HOME}\nEngine: 127.0.0.1:${port}`,
   });
 }
 
