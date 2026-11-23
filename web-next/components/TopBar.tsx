@@ -85,7 +85,7 @@ export function CommandBar() {
   };
 
   const onTrading = async (on: boolean) => {
-    if (on && !confirm(`Enable AUTO-TRADE: the bot will place orders on your ${venueOf(ov?.settings).label} account (paper money) when ${ov?.kairos?.label || "model"} signals pass all gates.`)) return;
+    if (on && !confirm(`Enable AUTO-TRADE: the bot will place orders on your ${venueOf(ov?.settings).label} account (demo funds) when ${ov?.kairos?.label || "model"} signals pass all gates.`)) return;
     try {
       await post("/api/trading", { enabled: on });
     } catch (err: any) {
