@@ -1,4 +1,4 @@
-"""Where orders go. Two venues, both paper money; there is deliberately no real-money venue.
+"""Where orders go. Two venues, both on demo funds; there is deliberately no live-funds venue.
 
 - testnet: api-testnet.bybit.com. Its own (thin, often dislocated) order book and its own prices.
 - demo:    api-demo.bybit.com. Bybit's Demo Trading account on MAINNET market data: orders are
