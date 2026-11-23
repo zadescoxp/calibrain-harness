@@ -1,4 +1,4 @@
-"""Perpetual execution on a paper venue (Bybit testnet or Demo Trading): entries with server-side
+"""Perpetual execution on a demo venue (Bybit testnet or Demo Trading): entries with server-side
 TP/SL, verification, time-stops, reconciliation, kill switch and daily loss limit.
 
 On Demo Trading (simulated fills on the mainnet market) every trade is also booked through the
