@@ -18,6 +18,7 @@ def config_snapshot(s: Settings) -> dict[str, Any]:
     from .kairos.questions import QUESTION_SET_VERSION
 
     return {
+        "venue": s.venue, "cost_realism": s.shadow_costs,
         "model_provider": s.model_provider, "model_id": s.model_spec.model,
         "symbols": s.symbols, "decision_tf": s.decision_tf, "horizon_minutes": s.horizon_bars * s.decision_tf_minutes,
         "qset": QUESTION_SET_VERSION, "exploration_mode": s.exploration_mode, "exit_mode": s.exit_mode,
@@ -38,7 +39,7 @@ def start(db: DB, s: Settings, name: str | None = None, notes: str | None = None
     n = (db.one("SELECT COUNT(*) n FROM runs") or {}).get("n", 0) + 1
     cfg = config_snapshot(s)
     st = cfg["strategy"]
-    auto = (f"Run {n} · {s.model_spec.label} · {cfg['qset']} · {'explore' if cfg['exploration_mode'] else 'strict'} · "
+    auto = (f"Run {n} · {s.venue} · {s.model_spec.label} · {cfg['qset']} · {'explore' if cfg['exploration_mode'] else 'strict'} · "
             f"{st['bracket_mode']} bracket · {st['entry_mode']} · {'sym' if st['symmetrize'] else 'raw'} · {st['trade_trigger']} · "
             f"{len(cfg['symbols'])} symbols")
     rid = db.insert("runs", {"name": name or auto, "started_ts": now, "ended_ts": None, "notes": notes, "config_json": cfg})
@@ -46,7 +47,18 @@ def start(db: DB, s: Settings, name: str | None = None, notes: str | None = None
 
 
 def ensure(db: DB, s: Settings) -> dict[str, Any]:
-    return current(db) or start(db, s)
+    """The open run, or a new one. A venue change always starts a new run: testnet and demo fills are
+    different markets, so their P&L and execution numbers must never be pooled."""
+    cur = current(db)
+    if cur:
+        cfg = cur.get("config_json") or {}
+        if isinstance(cfg, str):
+            import json
+            cfg = json.loads(cfg or "{}")
+        if (cfg.get("venue") or "testnet") == s.venue:
+            return cur
+        return start(db, s, notes=f"venue changed {cfg.get('venue') or 'testnet'} -> {s.venue}")
+    return start(db, s)
 
 
 def define_history(db: DB, boundaries: list[tuple[str, float, float | None, dict[str, Any], str]]) -> None:
