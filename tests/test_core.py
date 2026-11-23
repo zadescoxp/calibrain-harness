@@ -176,7 +176,8 @@ def test_save_env_upserts_and_restricts_permissions(tmp_path, monkeypatch):
     text = env.read_text()
     assert "BYBIT_API_KEY=newkey123" in text and "old" not in text
     assert "# comment" in text and "CTB_SYMBOLS=BTCUSDT" in text and "KAIROS_API_KEY=kk" in text
-    assert stat.S_IMODE(env.stat().st_mode) == 0o600
+    if os.name != "nt":  # POSIX modes; on Windows the per-user ACL of %APPDATA% protects the file
+        assert stat.S_IMODE(env.stat().st_mode) == 0o600
     with pytest.raises(ValueError):
         save_env({"KAIROS_API_KEY": "a\nEVIL=1"}, path=env)
     assert key_hint("abcdefgh1234") == {"set": True, "hint": "…1234"}
