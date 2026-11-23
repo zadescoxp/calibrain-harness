@@ -1,0 +1,98 @@
+{
+  "name": "calibrain-harness",
+  "productName": "Calibrain Harness",
+  "version": "0.1.0",
+  "description": "Calibrain Harness: a crypto perp trading research terminal (Bybit Demo / Testnet only)",
+  "author": "Calibrain Harness",
+  "license": "SEE LICENSE IN ../LICENSE",
+  "private": true,
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "build:ui": "npm --prefix ../web-next ci && npm --prefix ../web-next run build",
+    "build:backend": "node scripts/build-backend.mjs",
+    "build:icons": "electron scripts/make-icons.js",
+    "dist": "npm run build:ui && npm run build:backend && electron-builder --publish never",
+    "dist:mac": "npm run build:ui && npm run build:backend && electron-builder --mac --publish never",
+    "dist:win": "npm run build:ui && npm run build:backend && electron-builder --win --publish never",
+    "pack": "electron-builder --dir --publish never"
+  },
+  "devDependencies": {
+    "electron": "45.4.1",
+    "electron-builder": "26.18.0"
+  },
+  "build": {
+    "appId": "dev.calibrain.harness",
+    "productName": "Calibrain Harness",
+    "artifactName": "Calibrain-Harness-${os}-${arch}.${ext}",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "backend-dist/ctb-backend",
+        "to": "backend",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "../web-next/out",
+        "to": "ui",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "asar": true,
+    "mac": {
+      "category": "public.app-category.finance",
+      "icon": "build/icon.icns",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "hardenedRuntime": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "darkModeSupport": true,
+      "minimumSystemVersion": "11.0"
+    },
+    "dmg": {
+      "title": "Calibrain Harness ${version}",
+      "backgroundColor": "#0a0a0a"
+    },
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "Calibrain Harness",
+      "deleteAppDataOnUninstall": false
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "icon": "build/icon.png",
+      "category": "Finance"
+    },
+    "afterPack": "scripts/adhoc-sign.js"
+  }
+}
