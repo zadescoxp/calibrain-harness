@@ -238,7 +238,7 @@ class Settings:
     daily_loss_limit_pct: float = _f("CTB_DAILY_LOSS_LIMIT_PCT", 3.0)
     max_venue_divergence_bp: float = _f("CTB_MAX_VENUE_DIVERGENCE_BP", 150)
 
-    # --- bybit: paper-money venues only, enforced in code (ctb/broker/venue.py) ---
+    # --- bybit: demo / testnet venues only, enforced in code (ctb/broker/venue.py) ---
     # testnet: api-testnet.bybit.com, its own thin book | demo: Bybit Demo Trading on the mainnet market
     venue: str = os.environ.get("CTB_VENUE", "testnet").strip().lower()
     # demo: book every fill at the worse of Bybit's report and the real mainnet book walk / fee schedule
